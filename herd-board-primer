@@ -4,6 +4,7 @@
   herd-board-primer check        is the tablet ready: awake, a lesson notebook open, nothing in flight, room to write
   herd-board-primer ask TEXT     write TEXT below the page's ink, press Respond, and follow the reply
   herd-board-primer ask --replay REQUEST TEXT   the same, answered with kept reply REQUEST again (to film it)
+  herd-board-primer attach N     an R1 whose connection dropped: the story's lines from line N on, then the rest as sent
 
 The R1's Primer app (window 24) runs this over ssh. Output is one JSON object per line:
   {"stage": "writing"|"pressed"|"reading"|"thinking"|"drawing"|"done"|"failed"|"ready"|"not ready", "note": ...}
@@ -14,6 +15,9 @@ The R1's Primer app (window 24) runs this over ssh. Output is one JSON object pe
   {"show": PNG}   what the tablet is drawing now, base64, cropped around its newest ink to fill the R1's screen
 It writes only on a page of a lesson notebook that is awake and open, only below everything already on the screen,
 and only while nobody is writing; it never sends anything off the tablet. Its own steps go to the herd-board trace.
+The story goes on when the R1's connection drops (its Wi-Fi gave out mid-story, 2026-11-02): every line sent is also kept
+in LIVE, and the R1 reconnects with attach and the count of lines it has. Asking the same question again while it is
+told attaches too.
 """
 import base64
 import fcntl
@@ -46,7 +50,7 @@ LOCK = os.path.expanduser('~/.cache/herd-board/primer.lock')
 RESPOND = (1279, 154)  # the Respond button, anchored to the top right of the page
 LEFT, RIGHT, SIZE, GAP, FLOOR = 150, 1250, 40, 70, 1780  # where and how large the question is written
 PITCH = SIZE*2.2
-STEP = 28  # seconds between narrated steps while the tablet draws: a step takes about this long
+STEP = 28  # seconds between narrated steps while the tablet draws, until its first block of ink is claimed
 DONE = {'acknowledged', 'cleared', 'held', 'refused'}
 VIEW = (480, 531)  # the R1's screen above its caption strip
 VOICE_WAIT = 8  # seconds a due line waits for its narration before Piper says it instead
@@ -55,18 +59,77 @@ LOOK = 2.5  # seconds between looks at the tablet for the R1's picture
 ERRAND = re.compile(r"(please\s+)?(text|send|message|email|remind|post|reply|call|tell (?!me\b|us\b)|yes\b|no\b|ok"
                     r"|okay|thanks|thank you)\b", re.I)
 PAPER, HEAD = 100, 200  # screen columns left of PAPER and rows above HEAD hold the tablet's toolbars and Respond
+# What the R1 says when a reply fails, by the first clue found in the server's reason. James heard
+# "Notebook model invalid_response; reply held, no automatic resend" (2026-11-01); the trace keeps that.
+PLAIN = [(('Rest of the story',), "I wrote the start of the story, but the rest didn't come. Ask again."),
+         (('page_changed', 'Page changed'), 'The page changed while I was writing, so I stopped to keep your ink safe. '
+          'Ask again.'),
+         (('page_unavailable',), "I couldn't read the notebook page, so I stopped. Ask again."),
+         (('invalid_response', 'invalid_json', 'SemanticError', 'format'), "My drawing didn't come out right, so "
+          'nothing was written. Ask again.'),
+         (('budget', 'too_large', 'too long for'), 'That answer was too long for the page. Ask for a shorter one.'),
+         (('busy',), 'The notebook helper is busy. Ask again in a minute.'),
+         (('Timed out', 'deadline', 'no answer'), 'That took too long, so I stopped. Ask again.'),
+         (('inserting', 'incomplete'), 'The tablet stopped partway through writing. Look at the page, then ask '
+          'again.'),
+         (('prepare', 'placed'), "I couldn't lay the answer out on the page. Ask again."),
+         (('unavailable', 'closed', 'connection'), "I couldn't reach the notebook helper. Ask again in a minute.")]
+
+
+def plain_words(reason):
+    reason = str(reason or '')
+    return next((words for clues, words in PLAIN if any(c in reason for c in clues)),
+                "Something went wrong, so nothing was written. Ask again.")
 
 
 out_lock = threading.Lock()
+RUNS = os.path.expanduser('~/.cache/herd-board/runs')  # each asked question's lines and voice, timed, for its film
+run_log = None
+LIVE = os.path.expanduser('~/.cache/herd-board/primer-live.jsonl')  # the question, then each line sent, for attach
+live = None
+
+
+def start_run(text):
+    """Keeps what this question sends the R1 (its R1 pictures aside), newest 40 runs: James wants each one filmed."""
+    global run_log, live
+    try:
+        live = os.fdopen(os.open(LIVE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w')
+        live.write(json.dumps({'question': text})+'\n')
+        live.flush()
+    except OSError:
+        live = None
+    try:
+        os.makedirs(RUNS, exist_ok=True)
+        run_log = os.fdopen(os.open(os.path.join(RUNS, time.strftime('%Y%m%d-%H%M%S')+'.jsonl'),
+                                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a')
+        run_log.write(json.dumps({'t': round(time.time(), 3), 'question': text})+'\n')
+        for old in sorted(os.listdir(RUNS))[:-40]:
+            os.unlink(os.path.join(RUNS, old))
+    except OSError:
+        run_log = None
 
 
 def out(**line):
     """One line to the R1. When its connection drops the question still finishes on the tablet."""
-    try:
-        with out_lock:
-            print(json.dumps(line), flush=True)
-    except OSError:
-        pass
+    text = json.dumps(line)
+    with out_lock:
+        try:
+            print(text, flush=True)
+        except OSError:
+            pass
+        if live:
+            try:
+                live.write(text+'\n')
+                live.flush()
+            except OSError:
+                pass
+    if run_log and 'show' not in line:
+        try:
+            with out_lock:
+                run_log.write(json.dumps(dict(t=round(time.time(), 3), **line))+'\n')
+                run_log.flush()
+        except OSError:
+            pass
 
 
 def context():
@@ -108,6 +171,8 @@ def in_flight():
     for d in lines[-1000:]:
         if d.get('stage') == 'press':
             pressed[d['request']] = d['t']
+        elif d.get('stage') == 'continued' and d.get('next'):  # a story's rest, on the page its head was written on
+            pressed[d['next']] = d['t']
         elif d.get('stage') in DONE or (d.get('stage') == 'state' and d.get('outcome') in ('written', 'no answer')):
             finished.add(d['request'])
     cutoff = time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(time.time()-600))
@@ -225,6 +290,7 @@ def press(doc, since):
     then responds, as its label says."""
     for _ in range(2):
         tablet.tap(*RESPOND)
+        trace.event('primer', 'tapped')
         end = time.time()+6
         while time.time() < end:
             time.sleep(.5)
@@ -285,8 +351,9 @@ def narration(request, opened=False):
 
 
 def read_back(text, first):
-    """The question read back, a breath, then the opening, said while the pen writes the question and the tale is still
-    being thought of. The read-back is Gemini's when it comes in time, else Piper's."""
+    """The question read back, said while the pen writes it; the opening's voice is made now and said when its
+    handwriting starts (James heard it minutes before any ink, 2026-11-01). The read-back is Gemini's when it comes
+    in time, else Piper's."""
     try:
         heard = voice.speech(text, timeout=6)
     except Exception as error:  # Piper reads it back
@@ -294,8 +361,13 @@ def read_back(text, first):
         trace.event('primer', 'voice failed', reason=f'{type(error).__name__}: {error}'[:200])
     out(say=text, **({'audio': base64.b64encode(voice.paused(heard)).decode()} if heard else {}))
     if first:
-        clip = voice.remembered(first)
-        out(say=first, **({'audio': base64.b64encode(clip).decode()} if clip else {}))
+        voice.remembered(first)
+
+
+def spoken(line):
+    """The kept voice of a line said every time (the opening), as an out() field, or nothing for Piper."""
+    clip = voice.remembered(line)
+    return {'audio': base64.b64encode(clip).decode()} if clip else {}
 
 
 class Narrator(threading.Thread):
@@ -339,24 +411,43 @@ class Narrator(threading.Thread):
 
 
 def follow(request, since, path=None, asked=0, opened=False):
-    """Narrate the request as the tablet draws it. With the question's page path, its tale is told from its first
-    beat as soon as herd-board-serve has written it; the later beats keep to the pen."""
+    """Narrate the request as the tablet draws it. With the question's page path, the tale's voices are made as soon
+    as herd-board-serve has written it. Each line is said as its paragraph's handwriting starts: the reply writes
+    each paragraph as one run of hand blocks, with its drawing after it. opened is the opening ("James, once upon a
+    time..."), said when its own handwriting starts, or False when the reply's first line carries it."""
     said, segments, drawing, deadline, narrator = 0, [], None, time.time()+600, None
+    opening_said = not isinstance(opened, str)
+    paragraphs, handwriting, claimed = 0, False, False  # hand runs begun; the last block claimed was a hand's
+    plain = False  # the page took a plain answer, not the tale
+    headed = False  # the reply's head (opening and first caption) is written first; its rest follows as another request
     while time.time() < deadline:
-        if path and not segments:
+        if path and not segments and not plain:
             segments = tale(path, asked, opened)
-            if segments:
-                narrator = Narrator.begin(segments)
-                out(say=segments[0], **narrator.get(0))
-                said = 1
+            narrator = Narrator.begin(segments)
         lines, since = records(since)
-        for d in (d for d in lines if d.get('request') == request):
+        for d in lines:
+            if d.get('request') != request:
+                continue
             stage, outcome = d.get('stage'), d.get('outcome')
+            if stage == 'head' and outcome == 'ok':
+                headed = True
+            elif stage == 'continued':
+                # The head is written; the rest is the next request, narrated on from where the head stopped.
+                headed = False
+                if d.get('next'):
+                    request = d['next']
+                    continue
+                stage = 'acknowledged'
+            if headed and (stage == 'acknowledged' and outcome in ('ok', 'scrolled') or stage == 'state' and outcome == 'written'):
+                continue  # its rest is still to come
             if stage == 'page_read':
                 out(stage='reading')
             elif stage == 'submitted':
                 out(stage='thinking')
             elif stage == 'rendered':
+                if d.get('mode') not in (None, 'lesson') and said == 0 and not headed:
+                    # The page shows a plain answer, not the tale: say what the page says (2026-11-01 12:08).
+                    plain, segments, narrator = True, [], None
                 segments = segments or narration(request, opened)
                 narrator = narrator or Narrator.begin(segments)
             elif stage == 'state' and outcome == 'writing' and drawing is None:
@@ -364,16 +455,42 @@ def follow(request, since, path=None, asked=0, opened=False):
                 segments = segments or narration(request, opened)
                 narrator = narrator or Narrator.begin(segments)
                 out(stage='drawing')
+            elif stage == 'ink_claimed' and outcome == 'ok':
+                claimed, hand = True, str(d.get('scene', '')).startswith('hand-')
+                if d.get('opens'):  # the server names the passage this block starts, if it starts one
+                    words = re.findall(r'[a-z0-9]+', (d['opens'] or '').lower())
+                    if not opening_said and words and ' '.join(re.findall(r'[a-z0-9]+', opened.lower())).startswith(' '.join(words[:-1] or words)):
+                        out(say=opened, **spoken(opened))
+                        opening_said, words = True, []
+                    found = None
+                    for key in (' '.join(words), ' '.join(words[:-1])) if words else ():  # the 60 characters may cut a word
+                        found = next((i for i in range(said, len(segments)) if key and ' '+key+' ' in
+                                      ' '+' '.join(re.findall(r'[a-z0-9]+', segments[i].lower()))+' '), None)
+                        if found is not None:
+                            break
+                    if found is not None:
+                        for j in range(said, found+1):
+                            out(say=segments[j], **(narrator.get(j) if narrator else {}))
+                        said = found+1
+                elif hand and not handwriting:
+                    paragraphs += 1
+                    for i in range(said, min(paragraphs, len(segments))):
+                        out(say=segments[i], **(narrator.get(i) if narrator else {}))
+                    said = max(said, min(paragraphs, len(segments)))
+                handwriting = hand
             elif stage == 'acknowledged' or (stage == 'state' and outcome == 'written'):
                 narrator = narrator or Narrator([])
+                if not opening_said:
+                    out(say=opened, **spoken(opened))
                 for i, s in enumerate(segments[said:], said):
                     out(say=s, **narrator.get(i))
                 out(stage='done', **narrator.get(len(segments)))
                 return True
             elif stage in DONE or (stage == 'state' and outcome == 'no answer'):
-                out(stage='failed', note=str(d.get('reason') or outcome or stage)[:160])
+                trace.event('primer', 'failed', request=request, reason=str(d.get('reason') or outcome or stage)[:300])
+                out(stage='failed', note=plain_words(d.get('reason') or outcome or stage))
                 return False
-        while drawing and said < len(segments) and time.time() >= drawing+said*STEP:
+        while drawing and not claimed and said < len(segments) and time.time() >= drawing+(said+1)*STEP:
             out(say=segments[said], **(narrator.get(said) if narrator else {}))
             said += 1
         time.sleep(.5)
@@ -381,11 +498,84 @@ def follow(request, since, path=None, asked=0, opened=False):
     return False
 
 
+def telling():
+    """Whether a question is being asked and told now: it holds LOCK."""
+    try:
+        with open(LOCK, 'a') as probe:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except OSError:
+        return True
+
+
+def told_question():
+    try:
+        with open(LIVE) as f:
+            return json.loads(f.readline()).get('question') or ''
+    except (OSError, ValueError, AttributeError):
+        return ''
+
+
+def same_question(a, b):
+    """A re-ask in other words ("together", "the trip"): most of its words are the told question's."""
+    a, b = (set(re.findall(r"[a-z']+", x.lower())) for x in (a, b))
+    return bool(a and b) and len(a & b)/len(a | b) >= 0.6
+
+
+def attach(start, wait=900):
+    """An R1 that lost its connection: the lines after its first START (of the story's pictures, only the newest),
+    then each line as it is sent, until the story is done or failed, or its asker is gone."""
+    try:
+        f = open(LIVE)
+    except OSError:
+        out(stage='failed', note='No story is being told.')
+        return 1
+    send = lambda text: (sys.stdout.write(text), sys.stdout.flush())
+    with f:
+        f.readline()
+        seen, picture, caught, deadline = 0, None, False, time.time()+wait
+        try:
+            while time.time() < deadline:
+                at, text = f.tell(), f.readline()
+                if text.endswith('\n'):
+                    seen += 1
+                    if seen <= start:
+                        continue
+                    if not caught and text.startswith('{"show"'):
+                        picture = text  # only the newest picture is worth sending over a weak connection
+                        continue
+                    try:
+                        end = json.loads(text).get('stage') in ('done', 'failed')
+                    except ValueError:
+                        end = False
+                    if end and picture and not caught:
+                        send(picture)  # the finished page, before the end
+                    send(text)
+                    if end:
+                        return 0
+                    continue
+                f.seek(at)
+                if not caught:
+                    caught = True
+                    if picture:
+                        send(picture)
+                if not telling():
+                    break
+                time.sleep(0.3)
+        except OSError:
+            return 1
+    out(stage='failed', note='The story stopped partway. Look at the page.')
+    return 1
+
+
 def main(argv):
     if len(argv) >= 2 and argv[1] == 'check':
         ready, why, *_ = readiness()
         out(stage='ready' if ready else 'not ready', note=why)
         return 0 if ready else 1
+    if len(argv) == 3 and argv[1] == 'attach' and argv[2].isdigit():
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        return attach(int(argv[2]))
     if len(argv) < 3 or argv[1] != 'ask':
         print(__doc__, file=sys.stderr)
         return 2
@@ -401,7 +591,10 @@ def main(argv):
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        out(stage='failed', note='Primer is already writing a question.')
+        if same_question(text, told_question()):
+            trace.event('primer', 'attached', words=len(text.split()))
+            return attach(0)
+        out(stage='failed', note="I'm still telling the last story. Ask again when it ends.")
         return 1
     ready, why, ctx, top, grey = readiness(len(wrap(text)))
     if ready:
@@ -423,6 +616,7 @@ def main(argv):
     except (OSError, ValueError) as error:
         trace.event('primer', 'prestart failed', path=path, reason=str(error)[:200])
     trace.event('primer', 'writing', path=path, top=top, words=len(text.split()))
+    start_run(text)
     out(stage='writing')
     first = opening(text)
     readback = threading.Thread(target=read_back, args=(text, first), daemon=True)
@@ -432,6 +626,7 @@ def main(argv):
     mirror.start()
     try:
         tablet.pen(pen)
+        trace.event('primer', 'written', path=path)
         time.sleep(1.5)  # the page saves the new strokes before Respond reads it
         request, since = press(ctx['doc'], since)
     except Exception:
@@ -445,10 +640,10 @@ def main(argv):
         mirror.finish()
         out(stage='failed', note='Respond did not start on the tablet.')
         return 1
-    readback.join(8)  # the question and the opening are said before the tale
+    readback.join(8)  # the question is read back before the tale
     trace.event('primer', 'pressed', request=request, path=path)
     out(stage='pressed', note=request[9:17])
-    ok = follow(request, since, path, asked, bool(first))
+    ok = follow(request, since, path, asked, first or False)
     mirror.finish()
     return 0 if ok else 1
 

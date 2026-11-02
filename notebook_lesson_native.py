@@ -17,8 +17,11 @@ import hashlib
 
 from notebook_drawing import compile_storyboard, HAND_STROKES
 from notebook_lesson import parse_lesson
-from notebook_stroke_asset import storyboard_assets, validate_native_ink_budget, HAND_REGIONS
+from notebook_stroke_asset import storyboard_assets, validate_native_ink_budget
 from notebook_plotter_font import font_budget_fallback
+
+# The tablet's importer takes at most 19 pages in a lesson (herdRespond.qmd): six steps, an equation and 12 written regions.
+LESSON_PAGES = 19
 
 
 def has_lesson(response):
@@ -33,7 +36,7 @@ def native_lesson_bundle(response):
 
 @font_budget_fallback
 def native_semantic_bundle(response, *, reveal=False, playback=False, pen_equations=False, hand=None, opening=None,
-                           picture=None):
+                           picture=None, told=None):
     """Prepare semantic replies directly; no coordinate-text round trip.
 
     Pure offline preparation, not live-route enablement. The same existing
@@ -51,7 +54,7 @@ def native_semantic_bundle(response, *, reveal=False, playback=False, pen_equati
         if pen_equations and not playback:
             raise ValueError('pen equations require native playback support')
         return native_story_bundle(reply['story'],reply['drafts'],playback=playback)
-    options = dict(reveal=reveal, playback=playback, pen_equations=pen_equations, hand=hand, opening=opening)
+    options = dict(reveal=reveal, playback=playback, pen_equations=pen_equations, hand=hand, opening=opening, told=told)
     plan, report = reply['plan'], dict(used=False, reason=reply.get('picture_refused', 'no picture'))
     if picture and 'picture' in reply and 'captions' in reply['picture']:
         try:
@@ -160,9 +163,10 @@ def _scened_plan(plan, frames, labels, steps, room):
 
 
 def _bundle_from_compiled_lesson(plan, *, reveal=False, playback=False, pen_equations=False, hand=None, opening=None,
-                                 intro=None):
+                                 intro=None, told=None):
     """Internal common path; callers must validate the complete lesson first. intro, a pictured plan, is drawn first
-    with its own captions, and plan's steps follow it."""
+    with its own captions, and plan's steps follow it. told, the caption a story's head already wrote with its
+    opening: this rest leaves that caption out, keeps its picture, and still ends with "The End"."""
     if type(reveal) is not bool or type(playback) is not bool or reveal and playback:
         raise ValueError('explicit native reveal policy required')
     if type(pen_equations) is not bool or pen_equations and not playback:
@@ -171,6 +175,8 @@ def _bundle_from_compiled_lesson(plan, *, reveal=False, playback=False, pen_equa
     steps, tail, tail_sources = [], [], []
     for part in ([intro] if intro else [])+[plan]:
         steps += _ink_steps(part, source_doc, reveal, playback)
+    if told:
+        steps = _untold(steps, told)
     if plan.get('equation'):
         if pen_equations:
             from notebook_equation_ink import equation_plan
@@ -187,25 +193,55 @@ def _bundle_from_compiled_lesson(plan, *, reveal=False, playback=False, pen_equa
                                playback=asset['playback']))
         else:
             tail.append(dict(kind='equation', source=plan['equation']))
-    # The opening ("James, once upon a time...") and every caption and the takeaway in the operator's chosen
-    # hand when they fit, else the opening and takeaway, else the opening, else all typed: words a hand cannot write
+    # The opening ("James, once upon a time...") and every caption and the takeaway it can write in the operator's
+    # chosen hand when they fit, else the opening and takeaway, else the opening, else all typed: words a hand cannot write
     # never fail the reply.
     texts = [text for text, _, _ in steps] + [plan['takeaway']]
-    written = ([_hand_blocks(text, hand, source_doc, place) for place, text in enumerate(texts)]
+    written = ([_hand_blocks(text, hand, source_doc, place) if text else [] for place, text in enumerate(texts)]
                if hand is not None and playback else [])
     opened = _hand_blocks(opening, hand, source_doc, len(texts)) if written and opening else None
+    # A story that opens "James, once upon a time..." ends with "The End" over a scroll, centred, when it fits; so
+    # does the rest of one whose head wrote that opening.
+    ended = _end_blocks(hand, source_doc) if opened or told and written else None
     typed = [None]*len(texts)
-    choices = (([(opened, written)] if all(written) else []) + ([(opened, typed[:-1]+written[-1:])] if written[-1] else [])
-               if written else []) + ([(opened, typed)] if opened else []) + [(None, typed)]
-    for start, words in choices:
-        blocks, sources = _lesson_blocks(steps, tail, tail_sources, start, words, plan['takeaway'], playback)
+    # A passage the hand cannot write is typed by itself; the others stay handwritten.
+    # A lesson over the tablet's pages keeps its earliest captions written and types the later ones, the takeaway last
+    # (2026-11-01).
+    n = len(texts)-1
+    choices = (([(opened, written)] if any(written) else []) +
+               ([(opened, written[:k]+typed[k:n]+written[n:]) for k in range(n-1, -1, -1)] if written[-1] else []) +
+               [(opened, written[:k]+typed[k:]) for k in range(n, 0, -1) if any(written[:k])] if written else []) + \
+              ([(opened, typed)] if opened else []) + [(None, typed)]
+    # The ending only goes with every passage written: it is left out before any passage is typed.
+    choices = [(start, words, ended) for start, words in choices[:1] if ended] + [(start, words, None) for start, words in choices]
+    for start, words, end in choices:
+        blocks, sources = _lesson_blocks(steps, tail, tail_sources, start, words, plan['takeaway'], playback, end)
         try:
             validate_native_ink_budget(blocks)  # Includes math BEFORE any provision/import.
+            if len(sources) > LESSON_PAGES:
+                raise ValueError('more lesson pages than the tablet imports')
             break
         except ValueError:
-            if start is None and words is typed:
+            if start is None and words is typed and end is None:
                 raise
-    return dict(plan=plan, blocks=blocks, sources=sources)
+    # The words each written passage opens with, by the scene of its first block: the narrator says a passage as its
+    # handwriting starts.
+    passages = {w[0][0]['scene']: text for text, w in zip([opening]+texts, [start]+list(words)) if w}
+    # A typed caption is said as its drawing starts, by that drawing's scene and stage.
+    passages.update({f"{ink['scene']}/{ink['stage']}": text for (text, block, _), w in zip(steps, words) if not w and text
+                     for ink in [b for b in block if b['kind'] == 'ink'][:1]})
+    return dict(plan=plan, blocks=blocks, sources=sources, passages=passages)
+
+
+def _untold(steps, told):
+    """steps without the caption a story's head already wrote: the step that says it (or begins with it, when the
+    steps sharing one picture were joined), else the first, which is the same beat in other words. Its picture stays."""
+    key = ' '.join(told.split())
+    for index, (text, block, source) in enumerate(steps):
+        said = ' '.join(text.split())
+        if said == key or said.startswith(key+' '):
+            return steps[:index]+[(said[len(key):].strip(), block, source)]+steps[index+1:]
+    return [('',)+tuple(steps[0][1:])]+steps[1:] if steps else steps
 
 
 def _ink_steps(plan, source_doc, reveal, playback):
@@ -245,7 +281,7 @@ def _ink_steps(plan, source_doc, reveal, playback):
     return steps
 
 
-def _lesson_blocks(steps, tail, tail_sources, opened, words, takeaway, playback):
+def _lesson_blocks(steps, tail, tail_sources, opened, words, takeaway, playback, ending=None):
     # Playback narrates each addition before drawing it. Keep the first block label-only so the first caption also
     # uses the native typewriter path; one picture: introductory caption above, later captions below. Legacy/static
     # clients retain their established ordering, caption after its picture.
@@ -255,7 +291,7 @@ def _lesson_blocks(steps, tail, tail_sources, opened, words, takeaway, playback)
         blocks += [b for b, _ in opened]
         sources += [s for _, s in opened]
     for (text, block, source), written in zip(steps, words):
-        caption = [b for b, _ in written] if written else [dict(kind='text', text=text, styles=[])]
+        caption = [b for b, _ in written] if written else [dict(kind='text', text=text, styles=[])] if text else []
         sources += [s for _, s in written or []] + source
         blocks += caption + block if playback else block + caption
     blocks += tail
@@ -265,17 +301,40 @@ def _lesson_blocks(steps, tail, tail_sources, opened, words, takeaway, playback)
         sources += [s for _, s in words[-1]]
     else:
         blocks.append(dict(kind='text', text='Takeaway: '+takeaway, styles=[]))
+    if ending:
+        blocks += [b for b, _ in ending]
+        sources += [s for _, s in ending]
     return blocks, sources
 
 
 def _hand_blocks(text, hand, source_doc, place):
     """(block, source) pairs writing text in the hand, or None when the hand cannot write it."""
-    from notebook_hand_ink import hand_plans, VELOCITY
-    from notebook_ink_playback import playback_assets
-    try:
-        plans = hand_plans(text, hand, place=place)
-    except ValueError:  # includes NativePenBudgetError
+    from notebook_hand_ink import hand_plans
+    import unicodedata
+    # A letter the hand lacks is written as its plain letter (Erdős as Erdos, 2026-11-01), else the passage is typed.
+    for words in dict.fromkeys((text, ''.join(unicodedata.normalize('NFKD', c)[0] for c in text))):
+        try:
+            plans = hand_plans(words, hand, place=place)
+            break
+        except ValueError:  # includes NativePenBudgetError
+            plans = None
+    if plans is None:
         return None
+    return _written(plans, source_doc)
+
+
+def _end_blocks(hand, source_doc):
+    """(block, source) pairs for 'The End' over a scroll in the hand, or None when the hand cannot write it."""
+    from notebook_hand_ink import end_plan
+    try:
+        return _written([end_plan(hand)], source_doc)
+    except ValueError:
+        return None
+
+
+def _written(plans, source_doc):
+    from notebook_hand_ink import VELOCITY
+    from notebook_ink_playback import playback_assets
     written = []
     for hand_plan in plans:
         program = compile_storyboard(hand_plan)
@@ -291,6 +350,24 @@ def _hand_blocks(text, hand, source_doc, place):
     return written
 
 
+def prepare_head_reply(opening, caption, hand):
+    """A story reply's head: its opening and the tale's first caption in the hand, nothing drawn, no takeaway and no
+    ending, written while the rest is still being composed and drawn. Raises ValueError when the hand cannot write
+    them or they pass the tablet's budget; the reply is then written whole, as before."""
+    source_doc = str(uuid.uuid4())
+    opened, written = _hand_blocks(opening, hand, source_doc, 1), _hand_blocks(caption, hand, source_doc, 0)
+    if not opened or not written:
+        raise ValueError('the hand cannot write the head of this story')
+    # Label-only first block, as a lesson's: the opening then starts on the native typewriter path.
+    blocks = [dict(kind='text', text='', styles=[])]+[b for b, _ in opened+written]
+    sources = [s for _, s in opened+written]
+    validate_native_ink_budget(blocks)
+    if len(sources) > LESSON_PAGES:
+        raise ValueError('more lesson pages than the tablet imports')
+    return dict(mode='lesson', plan=None, blocks=blocks, sources=sources,
+                passages={opened[0][0]['scene']: opening, written[0][0]['scene']: caption})
+
+
 def prepare_native_lesson(response, store):
     """Resolve equations before provisioning; return only supported client blocks."""
     bundle = native_lesson_bundle(response)
@@ -298,13 +375,14 @@ def prepare_native_lesson(response, store):
 
 
 def prepare_semantic_reply(response, store, *, reveal=False, playback=False, pen_equations=False, hand=None,
-                           opening=None, picture=None):
+                           opening=None, picture=None, told=None):
     """Offline semantic preparation using the existing registered-media path.
 
-    picture, if given, turns a reply's picture into its frames (PNG bytes, one per step), or raises.
+    picture, if given, turns a reply's picture into its frames (PNG bytes, one per step), or raises. told, the
+    caption a story's head already wrote (prepare_head_reply): this is its rest.
     """
     return _resolve_equations(native_semantic_bundle(response, reveal=reveal, playback=playback, pen_equations=pen_equations,
-                                                     hand=hand, opening=opening, picture=picture),store)
+                                                     hand=hand, opening=opening, picture=picture, told=told),store)
 
 
 def _resolve_equations(bundle, store):
@@ -330,8 +408,10 @@ def source_document_files(bundle, template, parent):
     story = bundle.get('mode') == 'story'
     if story != all('story' in b for b in inks):
         raise ValueError('native bundle/story contract mismatch')
-    minimum = 1 if story or bundle['plan'].get('semantic', {}).get('family') == 'drawing' else 3
-    maximum = 12 if story else 7 + sum(b.get('role') == 'hand' for b in inks)  # six steps, an equation, the words
+    # A story's head (prepare_head_reply) is handwriting only and has no plan: two hand pages, opening and first caption.
+    minimum = 1 if story or (bundle['plan'] or {}).get('semantic', {}).get('family') == 'drawing' or (
+        inks and all(b.get('role') == 'hand' for b in inks)) else 3
+    maximum = 12 if story else min(LESSON_PAGES, 7 + sum(b.get('role') == 'hand' for b in inks))
     if not minimum <= len(sources) <= maximum or (not story and len(inks) != len(sources)):
         raise ValueError('bounded lesson source pages required')
     doc = sources[0]['source_doc']
@@ -426,7 +506,7 @@ def inspect_source_archive(data, doc, parent, page, expected_strokes, *, story=F
     from ink import strokes
     if type(story) is not bool:
         raise ValueError('explicit story import policy required')
-    maximum = 12 if story else 7 + HAND_REGIONS  # six steps, an equation and the handwritten words
+    maximum = 12 if story else LESSON_PAGES
     for value in (doc, parent, page):
         if not isinstance(value, str) or str(uuid.UUID(value)) != value:
             raise ValueError('canonical import identity required')

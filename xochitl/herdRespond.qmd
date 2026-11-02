@@ -36,10 +36,27 @@ AFFECT /qml/device/view/navigator/Navigator.qml
 				var stopped = herdState === "writing" && herdJob && herdJob.live && herdJob.path && herdJob.request ? herdJob : null
 				herdState = "failed"; herdNote = herdFailureNote(r, st)
 				if (stopped) {
-					// Status only: never retry, clear an attempt, or transmit free-form diagnostics.
-					herdHttp("POST", "/native-text-failed", {page: stopped.path, request: stopped.request}, function() {})
+					// Status only: never clear an attempt or transmit free-form diagnostics. If nothing of this reply reached
+					// the page, say so: the server then lets the button ask again by itself (herdAutoAskTick), once the pen
+					// has been still 3 s, instead of making James tap twice (2026-11-02).
+					var untouched = stopped.touched !== true
+					herdHttp("POST", "/native-text-failed", {page: stopped.path, request: stopped.request, untouched: untouched}, function(st2, r2) {
+						if (st2 === 200 && r2 && r2.untouched === true && herdJob === stopped && herdState === "failed") {
+							stopped.autoAsk = true; herdNote = "Paused for your writing; asking again"
+						}
+					})
 				}
 				if (herdJob && herdJob.path && herdJob.request) { herdTimer.interval = 2000; herdTimer.restart() }
+			}
+			function herdAwaitRest(request) {
+				// The server keeps the page's job for the rest of a story whose head was just written: wait for that
+				// request as for any other, with the last write's per-request layout dropped so the rest measures afresh.
+				var j = herdJob
+				if (!j || typeof request !== "string" || !request) { herdState = ""; herdNote = ""; herdJob = null; return }
+				j.request = request
+				delete j.nativePlots; delete j.nativeInkUsed; delete j.nativeLesson; delete j.blankProse; delete j.inkFloor; delete j.lastRetry; delete j.touched
+				herdState = "waiting"; herdNote = "More of the story"
+				herdTimer.interval = 250; herdTimer.restart()
 			}
 			function herdDismissFailure() {
 				// Dismissal is not a resend. The next explicit RESPOND starts a new job.
@@ -54,7 +71,7 @@ AFFECT /qml/device/view/navigator/Navigator.qml
 					"Page changed — request stopped", "Page unavailable — request stopped",
 					"Previous reply is still pending", "Reply couldn't be placed", "Reply may be incomplete",
 					"Mac connection lost", "Notebook connection needs setup", "Notebook service unavailable",
-					"No new handwriting found", "Reply needs attention"]
+					"No new handwriting found", "Rest of the story didn't arrive", "Reply needs attention"]
 				if (notes.indexOf(error) >= 0) return error
 				if (status === 401 || status === 403) return "Notebook connection needs setup"
 				if (status === 503) return "Notebook service unavailable"
@@ -75,6 +92,7 @@ AFFECT /qml/device/view/navigator/Navigator.qml
 				if (error === "A notebook request is already pending on this page") return "Previous reply is still pending"
 				if (error === "unsupported native text anchor") return "Reply couldn't be placed"
 				if (error === "nothing new written since the last answer") return "No new handwriting found"
+				if (error.indexOf("Rest of the story") === 0) return "Rest of the story didn't arrive"
 				if (error.indexOf("Caption incomplete:") === 0 || error === "Tablet stopped while inserting this reply; inspect the page before retrying") return "Reply may be incomplete"
 				return "Reply needs attention"
 			}
@@ -356,6 +374,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 							navigator.herdDismissFailure(); return
 						}
 						if (herdButton.herdDismissIncomplete()) return
+						herdButton.herdAutoAsks = 0  // James's own press starts a fresh count
 						var d = sceneView.document
 						LibraryController.setLastOpenedPage(d.id, root.currentPage)
 						herdButton.herdRequestInputSave()
@@ -419,6 +438,25 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 					} catch (e) { herdStopLessonImport(); navigator.herdFail(0, {error: String(e)}) }
 				}
 				Timer { id: herdLessonImportTimer; interval: 250; repeat: true; onTriggered: herdButton.herdLessonImportTick() }
+				// A reply stopped before any of it reached the page (James's pen or new writing): ask again by itself, as
+				// his tap-to-dismiss then tap-to-respond would, once the pen has been still 3 s. At most twice in a row.
+				property int herdAutoAsks: 0
+				function herdAutoAskTick() {
+					var j = navigator.herdJob
+					if (!herdMine || navigator.herdState !== "failed" || !j || j.autoAsk !== true) return
+					if (j.page !== herdPage || root.inSuspend || sceneView.isLoading || !sceneView.document ||
+						sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 3000) return
+					j.autoAsk = false
+					if (++herdAutoAsks > 2) { navigator.herdNote = "Reply needs attention"; return }
+					console.log("herdRespond: asking again after a stop with nothing written (" + herdAutoAsks + ")")
+					herdIncompleteDismissed = j.request || ""; herdIncompletePage = j.page || ""
+					navigator.herdDismissFailure()
+					var d = sceneView.document
+					LibraryController.setLastOpenedPage(d.id, root.currentPage)
+					herdRequestInputSave()
+					navigator.herdRespond(d.id, root.currentPage, String(root.currentPageId || ""), herdNewQuestionRequest())
+				}
+				Timer { id: herdAutoAskTimer; interval: 500; repeat: true; running: herdButton.herdMine && navigator.herdState === "failed"; onTriggered: herdButton.herdAutoAskTick() }
 				function herdText(imported, frozen, layout) {
 					var j = navigator.herdJob
 					if (!frozen) frozen = {job: j, surface: herdContextSurface, revision: herdContextRevision, ink: herdContextInk}
@@ -532,6 +570,25 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 					if ((work.penWaits = (work.penWaits || 0)+1) > 120) { navigator.herdFail(0, {error: "Pen stayed at the page; reply held"}); return }
 					if (sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500) { herdLater(function() { herdPenWait(work) }, true); return }
 					herdTextDone(work)
+				}
+				function herdPenNear() { return sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500 }
+				function herdPenHold(a) {
+					// Inside a block too, a pen near the page only pauses the writing (2026-11-02: a pen held near the
+					// screen stopped replies outright, and James pressed Respond twice to get them back). Nothing is
+					// written while it waits; the page's own checks still run once the pen has been away 1.5 s.
+					if (!herdPenNear()) {
+						if (a.penSince) {
+							var paused = Date.now()-a.penSince
+							console.log("herdRespond: pen away; writing resumes after " + paused + " ms")
+							if (a.deadline) a.deadline += paused
+							if (a.progressDeadline) a.progressDeadline += paused
+							a.penSince = 0
+						}
+						return false
+					}
+					if (!a.penSince) { a.penSince = Date.now(); console.log("herdRespond: pen near the page; writing waits") }
+					if (Date.now()-a.penSince > 60000) throw new Error("Native drawing page or input changed; reply held")
+					return true
 				}
 				function herdFocusOwner(item, depth, budget) {
 					if (!item || depth > 20 || --budget.left < 0) throw new Error("Cannot identify native focus owner")
@@ -802,6 +859,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 								var gap = ""
 								for (var i = 0; i < count; i++) gap += "\n"
 								work.advanceTo = c.textCursorIndex + gap.length
+								work.job.touched = true  // anything this reply puts on the page, even blank lines
 								c.replaceText(gap, 0, 0, 0, SceneParticipant.RequestedByInputMethod)
 								work.padding += count
 								herdLayout(work)
@@ -823,6 +881,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 							if (work.continuation && (work.job.nativeInkUsed || work.job.nativeLesson) && work.reply.text.length) {
 								herdStartTyping(work, text); return
 							}
+							work.job.touched = true
 							c.replaceText(text, 0, 0, 0, SceneParticipant.RequestedByInputMethod)
 							console.warn("herdRespond: native text inserted " + work.reply.request + " cursor=" + y + " target=" + work.target + " padding=" + work.padding + " preliminary=" + c.hasPreliminaryLineBreaks)
 							herdLater(function() { herdTextDone(work) })
@@ -892,6 +951,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 				}
 				function herdTypingCompleted(a) {
 					if (a.completionDelivered) return
+					if (herdPenNear() && (a.penChecks = (a.penChecks || 0)+1) <= 120) { herdLater(function() { herdTypingCompleted(a) }); return }
 					a.completionDelivered = true // failed callbacks are never replayed
 					try {
 						var c = root.sceneController
@@ -916,9 +976,9 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						var c = root.sceneController
 						if (!herdMine || herdPage !== a.work.job.page || navigator.herdJob !== a.work.job ||
 							navigator.herdState !== "writing" || c !== a.controller || herdContextSurface !== a.surface ||
-							herdContextInk !== a.ink || root.inSuspend || sceneView.penClose ||
-							sceneView.strokeHandler.timeSincePenUp() < 1500 || c.hasTextSelection || c.selectionItemCount)
+							herdContextInk !== a.ink || root.inSuspend || c.hasTextSelection || c.selectionItemCount)
 							throw new Error("Caption incomplete: page or input changed; partial text kept, no automatic resume")
+						if (herdPenHold(a)) return
 						if (Date.now() > a.deadline || Date.now() > a.progressDeadline)
 							throw new Error("Caption incomplete: text stopped advancing; partial text kept, inspect before retrying")
 						// SceneView.isLoading includes controller.working and pending
@@ -963,6 +1023,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						if (a.next >= a.units.length) { herdStopTyping(); return }
 						// Mark pending BEFORE mutation: errors never replay a character.
 						a.pending = a.units[a.next++]
+						a.work.job.touched = true
 						c.replaceText(a.pending, 0, 0, 0, SceneParticipant.RequestedByInputMethod)
 					} catch (e) { herdStopTyping(String(e)) }
 				}
@@ -1052,7 +1113,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 					if (!g) return false
 					var c = root.sceneController
 					if (c !== g.controller || herdContextSurface !== g.surface || herdContextInk !== g.ink ||
-						root.inSuspend || sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500)
+						root.inSuspend || herdPenNear())
 						throw new Error("Page or pen changed during native image insertion; reply held")
 					var text = c.rootDocumentBoundingRect
 					if (!text || text.y+text.height !== g.textBottom) throw new Error("Text changed during native image insertion; reply held")
@@ -1124,6 +1185,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						work.blockImageGeometry = herdImageGeometry(work, block, bounds.x, top)
 						work.blockImageRequested = true // Never reinsert on a delayed callback.
 						herdImageObservation(work, "before")
+						work.job.touched = true
 						c.insertImageFileAsSceneItem(block.url, Qt.point(bounds.x + block.width / 2, top + block.height / 2))
 						herdImageObservation(work, "returned")
 						work.mediaBottom = top + block.height + 30
@@ -1131,6 +1193,10 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						root.exitTextMode()
 						var viewBottom = sceneView.sceneToView(Qt.point(0, work.mediaBottom))
 						if (viewBottom.y > sceneView.height - 300) sceneView.tileManager.moveViewBy(Qt.point(0, sceneView.height - 450 - viewBottom.y))
+						herdLater(function() { herdTextDone(work) }); return true
+					}
+					// A pen near the page waits (up to 120 rounds) before the image's geometry is checked.
+					if (work.blockImageGeometry && herdPenNear() && (work.imagePenWaits = (work.imagePenWaits || 0)+1) <= 120) {
 						herdLater(function() { herdTextDone(work) }); return true
 					}
 					if (herdImageGeometryReady(work)) {
@@ -1220,6 +1286,16 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						plots[block.scene] = origin
 						work.job.nativePlots = plots
 					}
+					// A drawing that would land below the screen (a question written low on the page) scrolls the
+					// view down once, then waits for the new view to reach the server before drawing (2026-11-01
+					// 22:30 refused instead). The page grows downward; nothing is drawn over ink.
+					var inkBottom = sceneView.sceneToView(Qt.point(origin[0], origin[1]+block.height)).y
+					if (inkBottom > sceneView.height-90 && work.inkScrolled !== block.scene+"/"+block.stage) {
+						work.inkScrolled = block.scene+"/"+block.stage
+						sceneView.tileManager.moveViewBy(Qt.point(0, sceneView.height-160-inkBottom))
+						herdLater(function() { herdTextDone(work) }, true)
+						return
+					}
 					var v = herdAssetScene.createObject(herdButton, {document: source, pageId: block.source_page})
 					if (!v) throw new Error("Native drawing source could not be opened")
 					herdInk = {work: work, block: block, origin: origin, view: v, phase: "loading", passes: 0,
@@ -1232,17 +1308,21 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 					if (!a || navigator.herdJob !== a.work.job || !herdMine || root.inSuspend ||
 						herdPage !== a.page || herdContextSurface !== a.surface || !sceneView.document ||
 						navigator.herdUuid(sceneView.document.id) !== a.doc || root.sceneController !== a.controller ||
-						herdContextInk !== a.ink || sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500) return false
+						herdContextInk !== a.ink) return herdInkWhy("page, surface or ink", a)
 					if (!locked) return true
 					if (!a.ownsLock || !herdPasteBusy || root.enabled !== false || !sceneView.adjustViewActive ||
-						sceneView.strokeHandler.lineTool !== Line.SelectionTool) return false
-					if (unchanged && herdContextRevision !== a.revision) return false
+						sceneView.strokeHandler.lineTool !== Line.SelectionTool) return herdInkWhy("lock or tool", a)
+					if (unchanged && herdContextRevision !== a.revision) return herdInkWhy("content revision", a)
 					var matrix = herdInkView()
-					for (var j = 0; j < matrix.length; j++) if (Math.abs(matrix[j]-a.matrix[j]) > .001) return false
+					for (var j = 0; j < matrix.length; j++) if (Math.abs(matrix[j]-a.matrix[j]) > .001) return herdInkWhy("view moved", a)
 					for (var i = 0; i < sceneView.children.length; i++) {
 						var child = sceneView.children[i]
-						if (String(child).indexOf("PenInputSurface") >= 0) return child.handler === null
+						if (String(child).indexOf("PenInputSurface") >= 0) return child.handler === null || herdInkWhy("pen input active", a)
 					}
+					return herdInkWhy("no pen surface", a)
+				}
+				function herdInkWhy(why, a) {
+					if (a && a.guardWhy !== why) { a.guardWhy = why; console.log("herdRespond: ink guard: " + why) }
 					return false
 				}
 				function herdInkFinish(error) {
@@ -1273,6 +1353,8 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 					var a = herdInk
 					if (!a) { herdInkTimer.stop(); return }
 					try {
+						if (a.phase !== a.logged) { console.log("herdRespond: ink", a.block.scene, a.block.stage, a.phase); a.logged = a.phase }  // the journal times each step
+						if (herdPenHold(a)) return
 						if (++a.passes > 250 + (a.playbackProgram ? Math.ceil(a.playbackProgram.duration/100) : 0)) throw new Error("Native drawing timed out; inspect before retrying")
 						if (!herdInkGuard(a.ownsLock, a.phase === "locking" || a.phase === "claiming")) throw new Error("Native drawing page or input changed; reply held")
 						var v = a.view, c = a.controller, b = a.block
@@ -1329,6 +1411,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						} else if (a.phase === "locking" && !c.working && ++a.lockPasses >= 5 && !herdContextBusy) {
 							if (c.selectionItemCount !== 0) throw new Error("Native destination selection changed")
 							a.phase = "claiming"
+							a.work.job.touched = true  // a granted claim pastes; count it as written from the request on
 							navigator.herdHttp("POST", "/native-ink-claim", {request: a.work.reply.request, page: a.work.job.path,
 								scene: b.scene, stage: b.stage, surface: a.surface, revision: a.revision, ink_revision: a.ink,
 								origin: a.origin, ui_locked: true}, function(st, r) {
@@ -1457,6 +1540,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 					// A queued timer callback after handoff must not cancel the native paste.
 					if (!a || a.phase !== "playback") return
 					try {
+						if (herdPenHold(a)) { a.playback.last = Date.now(); return }  // the drawing holds still
 						if (!herdInkGuard(true,true)) throw new Error("Playback page or input changed")
 						if (a.playback.painted >= a.playbackProgram.duration) {
 							herdPlaybackTimer.stop(); a.phase = "pasting"
@@ -1483,7 +1567,8 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						ctx.resetTransform(); ctx.clearRect(0,0,canvas.width,canvas.height)
 						canvas.paintOwner = null
 						if (!canvas.visible || !a || !a.playback) return
-						if (!herdInkGuard(true,a.phase === "playback")) throw new Error("Playback paint owner changed")
+						// A pen near the page holds the drawing still (herdPenHold); keep showing what is drawn so far.
+						if (!herdPenNear() && !herdInkGuard(true,a.phase === "playback")) throw new Error("Playback paint owner changed")
 						var m = a.playback.matrix
 						ctx.save(); saved = true; ctx.setTransform(m[0],m[1],m[2],m[3],m[4],m[5])
 						ctx.beginPath(); ctx.rect(0,0,a.block.width,a.block.height); ctx.clip()
@@ -1552,9 +1637,25 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						onPainted: herdButton.herdPlaybackPainted(playbackCanvas)
 					}
 				}
+				// Turned away once every drawing stage had committed: the reply is written and only its save proof
+				// needed this page, so it ends as left rather than failed (2026-11-01 22:20, 22:25).
+				function herdLeftPage(work) {
+					if (work.left) return
+					work.left = true; herdProofWork = null
+					console.log("herdRespond: page left while saving", work.reply.request)
+					navigator.herdHttp("POST", "/native-text-left", {page: work.job.path, request: work.reply.request}, function(st, r) {
+						if (navigator.herdJob !== work.job) return
+						if (st !== 200) { navigator.herdFail(st, r); return }
+						navigator.herdState = ""; navigator.herdNote = ""; navigator.herdJob = null
+					})
+				}
 				function herdTextDone(work) {
+					if (work.left) return  // a check queued before the page was turned
 					try {
-						if (!herdMine || herdPage !== work.job.page || navigator.herdJob !== work.job) throw new Error("Return to the original page to finish the reply")
+						if (!herdMine || herdPage !== work.job.page || navigator.herdJob !== work.job) {
+							if (navigator.herdJob === work.job && work.saving) { herdLeftPage(work); return }
+							throw new Error("Return to the original page to finish the reply")
+						}
 						var c = root.sceneController
 						if (work.endIndex !== undefined) {
 							c.setCursorIndex(work.endIndex < 0 ? c.rootDocumentLength : work.endIndex, SceneController.MoveAnchor)
@@ -1596,6 +1697,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 							// The native API takes the IMAGE CENTRE in scene coordinates.
 							var position = Qt.point(bounds.x + item.width / 2, top + item.height / 2)
 							work.mediaIndex = mediaIndex + 1
+							work.job.touched = true
 							c.insertImageFileAsSceneItem(item.url, position)
 							work.mediaBottom = top + item.height + 30
 							work.mediaWaits = 0
@@ -1648,11 +1750,13 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 							sceneView.viewToScene(Qt.point(0, sceneView.height)).y)
 						// Measure only after the final scroll/exitTextMode has settled.
 						if (work.job.nativeInkUsed && !work.inkVerified) {
+							work.saving = true
 							var seq = work.proofSeq = (work.proofSeq || 0)+1
 							work.proofAsked = Date.now(); herdProofWork = work
 							navigator.herdHttp("POST", "/notebook-ink-proof", {request: work.reply.request, layout: work.layoutProof || null}, function(st, r) {
 								if (work.proofSeq !== seq) return // a resumed check superseded this one
 								if (navigator.herdJob !== work.job || !herdMine || herdPage !== work.job.page) {
+									if (navigator.herdJob === work.job && work.saving) { herdLeftPage(work); return }
 									console.log("herdRespond: save check", seq, "dropped: page or job changed"); return
 								}
 								console.log("herdRespond: save check", seq, st, r && (r.state || (r.measure_layout ? "measure" : "")), r && r.reason || "")
@@ -1673,6 +1777,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
 						}
 						navigator.herdHttp("POST", "/native-text-done", {page: work.job.path, request: work.reply.request}, function(st, r) {
 							if (st !== 200) { navigator.herdFail(st, r); return }
+							if (r && r.next) { navigator.herdAwaitRest(r.next); return }  // a story's head: its rest comes as the next request
 							navigator.herdState = ""; navigator.herdNote = ""; navigator.herdJob = null
 						})
 					} catch (e) { root.exitTextMode(); navigator.herdFail(0, {error: String(e)}) }

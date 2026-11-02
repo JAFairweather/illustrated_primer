@@ -16,7 +16,7 @@ TABLET_ROUTES = {
     ('GET', '/answer'), ('POST', '/respond'), ('POST', '/write'),
     ('POST', '/write-live'), ('POST', '/native-text'),
     ('POST', '/native-text-done'), ('POST', '/notebook-media-proof'),
-    ('POST', '/native-text-failed'),
+    ('POST', '/native-text-failed'), ('POST', '/native-text-left'),
     ('POST', '/native-context'),
     ('POST', '/native-probe-result'),
     ('POST', '/native-probe-claim'),

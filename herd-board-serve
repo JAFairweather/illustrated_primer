@@ -19,6 +19,7 @@ never text), as herd-voice's and herd-summarise's are; a 429 holds all three off
 agents' session transcripts. recent is an agent's last few exchanges, [{"asked", "replied"}], once its transcript
 has been read for a section.
 """
+import traceback
 import base64, glob, hashlib, io, json, math, os, re, shlex, struct, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from ink import append, blank, blocks, pen_text, render_page, strokes, svg_lines
@@ -30,7 +31,7 @@ from notebook_view_audit import ViewAudit
 from notebook_native_probe import NativeProbe
 from notebook_ink_catalog import load_catalog, FACTORIES
 from notebook_lesson_native import has_lesson, prepare_native_lesson, lesson_source_archive, remap_imported_lesson
-from notebook_lesson_native import prepare_semantic_reply
+from notebook_lesson_native import prepare_semantic_reply, prepare_head_reply
 from notebook_semantic_reply import parse_semantic_reply, _picture
 import notebook_lesson
 from notebook_delivery import delivery_options, semantic_delivery, revision_pending, with_delivery
@@ -77,6 +78,7 @@ LESSON_NOTEBOOKS = os.environ.get('HERD_BOARD_LESSON_NOTEBOOKS')
 LESSON_CONFIG = os.path.join(os.path.dirname(os.path.realpath(__file__)), '.notebook-lessons.json')
 LESSON_SOURCE_TEMPLATE = '905df7ae-ff54-46b9-a71e-45bb02bef638'
 lesson_imports = {}  # one held pre-insertion bundle per destination; no paste authority
+hand_passages = {}  # each passage by the scene of its first handwritten block (a typed caption: scene/stage of its drawing), for the narrator
 WALK_GAP, WALKS, R1_EVERY = 1200, 6, 30   # quiet that ends a walk; walks kept; seconds between R1 readings
 SECTION_SYS = """You are a section writer for The Cyber Times, a newspaper about the work of AI coding agents for their \
 owner, James. Write the named agent's section for the day given, from its log: what James asked and what the agent \
@@ -1090,6 +1092,14 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 				raise ValueError('native semantic replies are not enabled for this notebook')
 			parsed = parse_semantic_reply(ready[path])
 		lesson = parsed['mode']=='lesson' if semantic else has_lesson(ready[path])
+		# A story in two segments (stream_head): its head is the opening and first caption by hand, its rest the
+		# reply without them.
+		story = streams.get(path) if semantic else None
+		head = story if story and story['request'] == job[4] and not story.get('stopped') else None
+		follow = story if story and story['next'] == job[4] else None
+		if head and not done:
+			lesson = (hand_supported is True and playback_supported is True and
+				bool(lesson_rollout_config().get('stroke_playback', False)) and bool(lesson_rollout_config().get('reply_hand')))
 		baseline = live_baseline(path)
 		attempt = baseline + ".native-attempt"
 		if done:
@@ -1100,7 +1110,7 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 					raise ValueError("native acknowledgement has been superseded")
 			if len(job) > 7 and job[7] and native_media_proof(path, request)["state"] != "persisted":
 				raise ValueError("notebook image is not saved yet; answer remains held")
-			if (request not in ink_fallbacks and (lesson or (not semantic and '[[notebook-ink:' in ready[path])) and
+			if (request not in ink_fallbacks and (lesson or head and head.get('inked') or (not semantic and '[[notebook-ink:' in ready[path])) and
 				native_ink_proof(request)["state"] != "persisted"):
 				raise ValueError("native drawing save is not confirmed; answer remains held")
 			from PIL import Image
@@ -1141,6 +1151,11 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 			pend(path)
 			print(time.strftime("%T"), "native text visible", path, "timing", json.dumps(timing_status(path)), file=sys.stderr, flush=True)
 			trace.event('acknowledged', request=request, path=path, timing=timing_status(path))
+			if head:
+				return continue_stream(path, job, head)
+			if follow:
+				streams.pop(path, None)
+			tale_told(path, follow['request'] if follow else request)
 			return {"state": "written", "page": path}
 		if os.path.isfile(attempt):
 			with open(attempt) as stream:
@@ -1180,15 +1195,25 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 			hand = lesson_rollout_config().get('reply_hand') if hand_supported is True and playback_supported else None
 			reader = lesson_rollout_config().get('reader')
 			opening = f"{reader}, {lesson_rollout_config().get('opening', 'once upon a time...')}" if reader else None
+			if (saved_tale(path) or {}).get('request') == job[4] and saved_tale(path).get('kind') == 'notes':
+				opening = None  # enriched notes are sections, not a tale: no "once upon a time" and no "The End"
 			if imported is None:
 				previous = lesson_imports.get(path)
 				if previous and previous['request'] == job[4]:
 					raise ValueError('Lesson import already requested; reply remains held')
-				if semantic:
+				if head:
+					bundle = prepare_head_reply(head['opening'], head['caption'], hand)
+					head['inked'] = True
+					hand_passages.update(bundle['passages'])  # the R1 says the opening as its pen starts (497c8d49 said it last)
+				elif semantic:
 					bundle = prepare_semantic_reply(ready[path], media_store,
 						reveal=reveal_supported and not playback_supported, playback=playback_supported,
-						pen_equations=pen_equations_supported, hand=hand, opening=opening,
-						picture=picture_frames if lesson_rollout_config().get('picture') == 'image' else None)
+						pen_equations=pen_equations_supported, hand=hand, opening=None if follow else opening,
+						picture=picture_frames if lesson_rollout_config().get('picture') == 'image' else None,
+						told=follow['caption'] if follow else None)
+					if len(hand_passages) > 2000:
+						hand_passages.clear()
+					hand_passages.update(bundle.get('passages') or {})
 					report = bundle.get('picture') or {}
 					if report.get('used') or report.get('reason', 'no picture') != 'no picture':
 						trace.event('picture', 'drawn' if report['used'] else 'procedural', request=job[4], path=path,
@@ -1285,6 +1310,8 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 		if re.sub(r"[^a-z]", "", name.lower()) == "pidog":
 			name = "Pi Dog"
 		stages["native_identity_ready"] = time.monotonic()
+		# A story's segments carry no label: the head writes the reader's name in its opening, and the rest continues it.
+		label = lambda blocks: '' if head or follow else reply_label(name, blocks)
 		from PIL.PngImagePlugin import PngInfo
 		metadata = PngInfo()
 		metadata.add_text('native_context', json.dumps({'request':job[4], 'context':frame_context}))
@@ -1304,7 +1331,7 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 				if unknown:
 					raise ValueError('drawing not in the catalog: ' + ', '.join(unknown))
 				registered = native_ink_runs.register(job[4], path, device_context.snapshot(), blocks, before,
-					preservation=preservation_supported, blank_prose=reply_label(name, blocks) == '' and
+					preservation=preservation_supported, blank_prose=label(blocks) == '' and
 					not any(b['text'] for b in blocks if b['kind'] == 'text'))
 			except ValueError as e:
 				if 'native text anchor' not in str(e) and 'not in the catalog' not in str(e):
@@ -1332,7 +1359,7 @@ def native_text(path, request="", done=False, ink_supported=False, imported=None
 		lesson_imports.pop(path, None)
 		return {"request": job[4], "text": plain, "top": top,
 			"inkBottom": max(100, box[3] - 30) if box else 120,
-			"label": reply_label(name, blocks), "media": media,
+			"label": label(blocks), "media": media,
 			"styles": [] if semantic else notebook_paragraph_styles(ready[path], plain), "blocks": blocks}
 
 
@@ -1347,8 +1374,12 @@ def reply_label(name, blocks):
 	return '' if any(b.get('role') == 'hand' for b in blocks) else f"{reader},"
 
 
-def native_text_failed(path, request):
-	"""Record a stopped native attempt without authorizing replay or losing its proof."""
+def native_text_failed(path, request, untouched=False):
+	"""Record a stopped native attempt without authorizing replay or losing its proof.
+
+	untouched: the tablet says nothing of this reply reached the page (James's pen or new writing stopped it first).
+	When no drawing stage was claimed either, the answer says so, and the tablet asks again by itself as an explicit
+	new question (supersedes), rather than James tapping twice. The old reply is never replayed."""
 	with pending_lock:
 		job = notebook_jobs.get(request)
 		if not job or job[1] != path or len(job) < 7 or job[6] is not True:
@@ -1378,10 +1409,18 @@ def native_text_failed(path, request):
 		# exact durable attempt still forbids replay and identifies this failure.
 		if not matching or current['state'] not in ('writing', 'failed', 'ready'):
 			raise ValueError('no matching native insertion attempt to stop')
+		story = streams.get(path)
+		if story and request in (story['request'], story['next']):
+			story['stopped'] = True  # no rest goes under a stopped head
+			streams.pop(path)
 		answers[path] = 'failed'
 		reply_errors[path] = 'Tablet stopped while inserting this reply; inspect the page before retrying'
 		reply_timings.setdefault(path, {}).setdefault('native_failed', time.monotonic())
-		return {'state': 'failed', 'request': request}
+		# A rest of a story goes under its head, so it is never asked again on its own.
+		blank = (untouched is True and not (story and request == story['next']) and
+			not native_ink_runs.stage_started(request))
+		trace.event('written', 'stopped', request=request, path=path, untouched=blank)
+		return {'state': 'failed', 'request': request, **({'untouched': True} if blank else {})}
 
 
 def write_live(path):
@@ -1699,8 +1738,8 @@ def lesson_rollout_config():
 		config = {'notebooks': config, 'draft_check': False}
 	if (not isinstance(config, dict) or
 		set(config)-{'notebooks','draft_check','model_transport','stroke_playback','label_hand','reply_hand','reader','opening',
-			'picture','story'} or
-		type(config.get('story',False)) is not bool or
+			'picture','story','stream'} or
+		type(config.get('story',False)) is not bool or type(config.get('stream',False)) is not bool or
 		config.get('picture','off') not in ('off','image') or
 		not {'notebooks','draft_check'} <= set(config) or
 		type(config['draft_check']) is not bool or type(config.get('stroke_playback',False)) is not bool or
@@ -1799,6 +1838,7 @@ def notebook_answer_stream(body):
 			'chunks':[dict(chunk) for chunk in stream['chunks'][body['after']+1:]]}
 
 
+TRANSIENT_MODEL_ERRORS = {'busy', 'unavailable', 'closed', 'runtime_unavailable', 'provider_error', 'incomplete_response'}
 REPAIR_NOTE = ('\n\nYour previous reply for this page was refused by the drawing checker before anything was '
 	'drawn: %s. Write a new complete reply that avoids that problem. Keep the same teaching idea; a simpler '
 	'drawing with fewer objects and labels is better than a refused one.')
@@ -1838,6 +1878,12 @@ PICTURE_NOTE = ('\n\nPicture: every lesson reply carries a top-level "picture" o
 	'entry per caption after the first. Your steps then follow below the picture as the technical figure: '
 	'captions that explain with the labels and the equation, in the same characters\' voice (Mira points at '
 	'the line), without retelling the story.')
+# Only for pictures written apart from the answer (a tale's), so the answering model's bounded context is unchanged.
+SPEECH_NOTE = ('\n\nSpeech: when a caption quotes a character\'s words, that frame\'s labels include one written as Name: '
+	'"words", the name as the captions call that character and up to six of the quoted words (Thomas: "Someone is '
+	'peeking!"); Name is always who speaks, never the words. It is lettered in a speech bubble pointing at the '
+	'character. Other labels name things exactly as '
+	'the captions do: a raven is "raven", never "crow".')
 
 
 # The story carries the lesson: James graded the earlier replies 2/5, textbook paragraphs with a story pasted on and a
@@ -1881,7 +1927,7 @@ def direct_picture(reply):
 	if not captions or not all(isinstance(c, str) and c.strip() for c in captions):
 		return None
 	try:
-		return _picture(notebook_image_model.direct(PICTURE_NOTE, str(reply.get('intent', '')), captions,
+		return _picture(notebook_image_model.direct(PICTURE_NOTE+SPEECH_NOTE, str(reply.get('intent', '')), captions,
 			str(reply.get('takeaway', ''))), len(captions))
 	except Exception as error:  # the procedural drawing stands
 		trace.event('picture', 'undirected', reason=f'{type(error).__name__}: {error}'[:300])
@@ -2151,11 +2197,15 @@ def primer_prestart(q):
 	def run():
 		def observe(raw):
 			entry['observed'] = raw
+		def head(tale):
+			entry['tale'] = tale  # a press after the tale holds its head as it takes this (notebook_model_answer)
+			if entry.get('job'):
+				stream_head(entry['job'], tale)
 		request = 'notebook-'+os.urandom(16).hex()
 		context = image_context
 		try:
 			if not replay and not waiting_send(path):  # a yes or no needs no tale and no web search
-				context = with_story(context, png, question, request, path)
+				context = with_story(context, png, question, request, path, head=head)
 			entry['context'] = context  # a retry after a refused answer keeps the facts
 			if replay:
 				with open(os.path.join(CACHE, 'replies', replay+'.json')) as f:
@@ -2192,25 +2242,182 @@ BEATS_NOTE = ('\n\nThe story is already written: use exactly these captions, one
 	'gets the edit "". Captions: %s Takeaway: %s')
 
 
+def told_as_written(result, context, attempt):
+	"""A reply asked to draw a tale already written is that lesson: a plain answer put one reply on the page and
+	the tale in the Primer's voice (2026-11-01 12:08). Asked again twice; the last plain answer stands."""
+	if attempt < 3 and BEATS_NOTE[:40] in context and (result.get('parsed') or {}).get('mode') == 'answer':
+		rejected = ModelTransportError('invalid_response')
+		rejected.detail = 'the story is already written: reply in lesson mode with its captions and takeaway, not a plain answer'
+		raise rejected
+
+
 TALES = os.path.join(CACHE, 'tales')  # each page's newest tale, which the R1 Primer starts telling before it is drawn
 
 
-def save_tale(path, tale):
+TOLD_KEEP = 6*3600  # seconds a told tale's closing question or task stays open for James to answer on its page
+
+
+def save_tale(path, tale, request=None):
 	try:
 		os.makedirs(TALES, exist_ok=True)
 		name = os.path.join(TALES, path.replace('/', '_')+'.json')
 		with open(name+'.new', 'w') as f:
-			json.dump(dict(tale, t=time.time()), f, ensure_ascii=False)
+			json.dump(dict(tale, t=time.time(), request=request), f, ensure_ascii=False)
 		os.replace(name+'.new', name)
 	except OSError as error:  # the Primer then narrates from the finished reply
 		trace.event('story', 'not saved', path=path, reason=str(error)[:200])
 
 
-def with_story(image_context, png, question, request, path):
+LEARNED = os.path.join(CACHE, 'learned.json')  # the tales James has been told: what each taught and its characters
+LEARNED_KEEP = 40
+
+
+def saved_tale(path):
+	"""The page's newest tale as saved, or None."""
+	try:
+		with open(os.path.join(TALES, path.replace('/', '_')+'.json')) as f:
+			tale = json.load(f)
+		return tale if isinstance(tale, dict) else None
+	except (OSError, ValueError):
+		return None
+
+
+def tale_told(path, request):
+	"""Marks the page's tale as written on it, once its reply is acknowledged: only a tale James saw has a closing
+	question he can answer, and only one he saw is something he has learned."""
+	try:
+		with open(os.path.join(TALES, path.replace('/', '_')+'.json')) as f:
+			tale = json.load(f)
+		if tale.get('request') == request:
+			name = os.path.join(TALES, path.replace('/', '_')+'.json')
+			with open(name+'.new', 'w') as f:
+				json.dump(dict(tale, told=True), f, ensure_ascii=False)
+			os.replace(name+'.new', name)
+			if tale.get('kind') != 'notes':  # his own notes enriched are not something the Primer taught him
+				remember_tale(tale)
+	except (OSError, ValueError, AttributeError):
+		pass
+
+
+def remember_tale(tale):
+	try:
+		with open(LEARNED) as f:
+			told = json.load(f)
+	except (OSError, ValueError):
+		told = []
+	lesson = re.split(r'(?<=[.!])\s', str(tale.get('takeaway', '')).strip(), maxsplit=1)[0]
+	told = [t for t in told if isinstance(t, dict) and t.get('request') != tale.get('request')]
+	told.append({'t': time.time(), 'request': tale.get('request'), 'intent': str(tale.get('intent', ''))[:200],
+		'lesson': lesson[:300], 'cast': [c for c in tale.get('cast') or [] if isinstance(c, str)][:4]})
+	with open(LEARNED+'.new', 'w') as f:
+		json.dump(told[-LEARNED_KEEP:], f, ensure_ascii=False)
+	os.replace(LEARNED+'.new', LEARNED)
+
+
+def learned_so_far():
+	"""What the story writer is told James already knows: the last 12 lessons, and up to 8 characters met before."""
+	try:
+		with open(LEARNED) as f:
+			told = [t for t in json.load(f) if isinstance(t, dict)]
+	except (OSError, ValueError, TypeError):
+		return None
+	topics = [f"{t.get('intent', '')}: {t.get('lesson', '')}".strip(': ') for t in told[-12:]]
+	cast = []
+	for t in reversed(told):
+		cast += [c for c in t.get('cast') or [] if isinstance(c, str) and c not in cast]
+	return {'topics': [t for t in topics if t], 'cast': cast[:8]} if told else None
+
+
+def told_tale(path):
+	"""The tale last written on this page within TOLD_KEEP, whose closing question or pen task James may be answering
+	with his new ink (the story writer judges whether he is). None otherwise."""
+	try:
+		with open(os.path.join(TALES, path.replace('/', '_')+'.json')) as f:
+			tale = json.load(f)
+		if tale.get('told') and tale.get('kind') != 'notes' and time.time()-tale['t'] < TOLD_KEEP:
+			return tale
+	except (OSError, ValueError, KeyError, TypeError, AttributeError):
+		pass
+	return None
+
+
+early_pictures = {}  # page path -> {'steps', 'done', 'picture', 'frames', 'labels'}: its tale's picture, begun when written
+EARLY_WAIT = 150  # seconds a composed lesson waits for its tale's picture
+
+
+def start_picture(path, tale, request):
+	"""Directs and draws the tale's picture while the answering model composes. One after another, the tale (43 s),
+	Pi Dog (46 s) and the picture (61 s) kept James waiting 2 min 50 s for his first ink on 2026-11-01."""
+	if lesson_rollout_config().get('picture') != 'image':
+		return
+	entry = {'steps': len(tale['steps']), 'done': threading.Event(), 'picture': None, 'frames': None, 'labels': None,
+		'tale': tale}
+	with pending_lock:
+		early_pictures[path] = entry
+	def run():
+		started = time.monotonic()
+		try:
+			captions = [s['caption'] + (f' [The picture below it: {s["see"]}]' if s['see'].strip() else
+				' [No new picture: it shares the one above]') for s in tale['steps']]
+			picture = _picture(notebook_image_model.direct(PICTURE_NOTE+SPEECH_NOTE, tale['intent'], captions, tale['takeaway']),
+				len(captions))
+			with pending_lock:
+				if early_pictures.get(path) is not entry and not entry.get('taken'):
+					# Its request failed or was replaced: 2026-11-01 22:03 still drew a picture nobody would see.
+					trace.event('picture', 'early dropped', request=request, path=path)
+					return
+			rendered = notebook_image_model.frames(picture['base'], picture['edits'], scenes=SCENES)
+			entry['labels'] = locate_labels(picture, rendered, request, path)
+			entry['picture'], entry['frames'] = picture, rendered
+			trace.event('picture', 'early', request=request, path=path, frames=len(rendered), labels=entry['labels'],
+				ms=round((time.monotonic()-started)*1000))
+		except Exception as error:  # the answering model's own picture is drawn instead
+			trace.event('picture', 'early failed', request=request, path=path, reason=f'{type(error).__name__}: {error}'[:300])
+		finally:
+			entry['done'].set()
+	threading.Thread(target=run, daemon=True).start()
+
+
+def take_early_picture(path, reply):
+	"""The picture begun for this page's tale, once drawn, when the composed lesson has the tale's steps; or None."""
+	with pending_lock:
+		entry = early_pictures.pop(path, None)
+	steps = reply.get('steps') if isinstance(reply, dict) else None
+	if not entry or not isinstance(steps, list) or len(steps) != entry['steps']:
+		return None
+	entry['taken'] = True  # a lesson composed before its picture was directed waits for it, not for its drop
+	entry['done'].wait(EARLY_WAIT)
+	return entry if entry['picture'] else None
+
+
+def tale_lesson(path, request):
+	"""The page's tale as its lesson, its early picture drawing every step, when the answering model's drawing is
+	refused twice: three refusals held James's 2026-11-01 21:58 reply, story and picture with it. None without both."""
+	with pending_lock:
+		entry = early_pictures.get(path)
+	if not entry:
+		return None
+	entry['done'].wait(EARLY_WAIT)
+	if not entry['picture']:
+		return None
+	tale = entry['tale']
+	mark = {'op': 'circle', 'center': [300, 180], 'radius': 10}  # the picture takes the drawing's place
+	reply = {'v': 1, 'mode': 'lesson', 'intent': tale['intent'] or 'a story', 'scene': {'family': 'drawing'},
+		'claims': [], 'steps': [{'caption': s['caption'], 'draw': [mark]} for s in tale['steps']],
+		'takeaway': tale['takeaway']}
+	text = json.dumps(reply, ensure_ascii=False)
+	return {'request_id': request, 'response_format': 'semantic-v1', 'text': text, 'parsed': parse_semantic_reply(text),
+		'metrics': {'first_text_ms': None, 'provider': 'tale'}}
+
+
+def with_story(image_context, png, question, request, path, head=None):
 	"""image_context with the tale written first for the answering model to draw (notebook_image_model.story), told
 	what a web search finds current when the question's text is known. Without a tale (a page that is not a lesson,
-	the writer failing, or "story" off in the rollout file) the answering model gets the facts and writes its own."""
+	the writer failing, or "story" off in the rollout file) the answering model gets the facts and writes its own.
+	head(tale), if given, is told the tale as soon as it is saved (stream_head)."""
 	found, config = '', lesson_rollout_config()
+	with pending_lock:
+		early_pictures.pop(path, None)  # never an earlier tale's picture for this one
 	if question:
 		started = time.monotonic()
 		try:
@@ -2225,7 +2432,9 @@ def with_story(image_context, png, question, request, path):
 		reader = config.get('reader') or 'James'
 		opening = f"{reader}, {config.get('opening', 'once upon a time...')}"
 		try:
-			tale = notebook_image_model.story(png, question, found, reader=reader, opening=opening)
+			earlier = told_tale(path)
+			tale = notebook_image_model.story(png, question, found, reader=reader, opening=opening, earlier=earlier,
+				learned=learned_so_far())
 		except Exception as error:  # the answering model writes its own tale
 			tale = None
 			trace.event('story', 'failed', request=request, path=path, reason=f'{type(error).__name__}: {error}'[:300])
@@ -2238,12 +2447,120 @@ def with_story(image_context, png, question, request, path):
 			fits = bool(note) and len((told+note).encode()) <= 11300  # room for a repair note
 			trace.event('story', 'written' if fits else 'too long' if note else 'not a lesson', request=request,
 				path=path, ms=round((time.monotonic()-started)*1000), steps=len(tale['steps']) if tale else 0,
-				bytes=len((told+note).encode()) if note else None)
+				bytes=len((told+note).encode()) if note else None, earlier=earlier['request'] if earlier else None,
+				kind=tale.get('kind') if tale else None)
 			if fits:
-				save_tale(path, tale)
+				save_tale(path, tale, request)
+				start_picture(path, tale, request)
+				if head:
+					head(tale)
 				return told+note
 	note = FACTS_NOTE % (time.strftime('%B %-d, %Y'), found) if found else ''
 	return image_context+note if note and len((image_context+note).encode()) <= 11300 else image_context
+
+
+streams = {}  # page path -> its story reply in two segments: the head on the page while the rest is composed and drawn
+STREAM_WAIT = 180  # seconds the rest's request waits for it once the head is written
+
+
+def stream_head(job, tale):
+	"""Holds a story reply's head for job: the opening and the tale's first caption, handwritten as soon as the tale is
+	written, while Pi Dog composes and the picture is drawn. The whole reply kept James 80 s from Respond to first
+	ink (616c36e1, 2026-11-02). The rest follows on the same page as a request of its own (continue_stream). Off
+	unless the rollout file says "stream"; never for enriched notes, a message waiting for its yes, or a page whose
+	reply is already held."""
+	config = lesson_rollout_config()
+	steps = tale.get('steps') or []
+	caption = str(steps[0].get('caption') or '').strip() if steps else ''
+	if (not config.get('stream') or not config.get('reader') or not config.get('reply_hand') or
+		tale.get('kind') == 'notes' or not caption):
+		return
+	path, request = job[1], job[4]
+	opening = f"{config['reader']}, {config.get('opening', 'once upon a time...')}"
+	try:
+		prepare_head_reply(opening, caption, config['reply_hand'])  # words its hand cannot write: the reply comes whole
+	except ValueError as error:
+		trace.event('head', 'not written', request=request, path=path, reason=str(error)[:200])
+		return
+	text = json.dumps({'v': 1, 'mode': 'answer', 'text': opening+'\n'+caption}, ensure_ascii=False)
+	with pending_lock:
+		if (pend('').get(path) != job or notebook_jobs.get(request) != job or answers.get(path) != 'waiting' or
+			path in ready or waiting_send(path)):
+			return  # the whole reply won the race, or the page moved on: one reply, as before
+		stream = {'request': request, 'opening': opening, 'caption': caption, 'next': None, 'rest': None, 'error': None,
+			'done': threading.Event(), 'tale': tale}
+		streams[path] = stream
+		try:
+			notebook_reply(request, text)
+		except ValueError as error:
+			streams.pop(path, None)
+			trace.event('head', 'refused', request=request, path=path, reason=str(error)[:200])
+			return
+	trace.event('head', request=request, path=path, opens=caption[:60])
+
+
+def tale_rest(path, request):
+	"""The rest of a story whose head is on the page when Pi Dog answered plainly: the tale's early picture drawing every
+	step (tale_lesson), else its later captions and takeaway typed. None without the tale."""
+	result = tale_lesson(path, request)
+	tale = (streams.get(path) or {}).get('tale')
+	if result or not tale:
+		return result
+	lines = [str(s.get('caption') or '').strip() for s in tale['steps'][1:]] + [str(tale.get('takeaway') or '').strip(), 'The End.']
+	text = json.dumps({'v': 1, 'mode': 'answer', 'text': '\n'.join(line for line in lines if line)}, ensure_ascii=False)
+	try:
+		parsed = parse_semantic_reply(text)
+	except ValueError:
+		return None
+	return {'request_id': request, 'response_format': 'semantic-v1', 'text': text, 'parsed': parsed,
+		'metrics': {'first_text_ms': None, 'provider': 'tale'}}
+
+
+def stream_deliver(path, stream):
+	"""The rest, or why there is none, to the rest's waiting request, once both exist. Caller holds pending_lock."""
+	job = pend('').get(path)
+	if not stream['next'] or not job or job[4] != stream['next'] or answers.get(path) != 'waiting':
+		return
+	if stream['rest'] is not None:
+		try:
+			notebook_reply(stream['next'], stream['rest'])
+			return
+		except ValueError as error:
+			stream['error'] = 'Rest of the story could not be held; its start is on the page'
+			trace.event('stream', 'refused', request=stream['next'], path=path, reason=str(error)[:200])
+	if stream['error']:
+		clear_pending(path, job, stream['error'])
+		if streams.get(path) is stream:
+			streams.pop(path)
+
+
+def stream_rest(path, stream, text=None, error=None):
+	"""The composed rest (or why it failed), kept for the rest's request. Caller holds pending_lock."""
+	stream['rest'], stream['error'] = text, error
+	stream['done'].set()
+	stream_deliver(path, stream)
+
+
+def continue_stream(path, job, stream):
+	"""The head is written: its rest follows as a request of its own on the same page and desk, ready when the rest
+	is (at once if it already is), failed after STREAM_WAIT. Caller holds pending_lock."""
+	marker = 'notebook-'+uuid.uuid4().hex
+	trace.bind(path, marker)
+	follow = start_notebook_job([job[0], path, int(time.time()), True, marker, None, True, None, delivery_options(job)])
+	notebook_names[marker] = notebook_names.get(job[4])
+	reply_timings[path] = {'respond': time.monotonic()}
+	stream['next'] = marker
+	trace.event('continued', request=job[4], path=path, next=marker)
+	stream_deliver(path, stream)
+	def wait():
+		if stream['done'].wait(STREAM_WAIT):
+			return
+		with pending_lock:
+			if pend('').get(path) == follow and answers.get(path) == 'waiting':
+				stream['stopped'] = True  # a late rest is dropped
+				stream_rest(path, stream, error=f'Rest of the story timed out after {STREAM_WAIT} s; its start is on the page')
+	threading.Thread(target=wait, daemon=True).start()
+	return {'state': 'written', 'page': path, 'next': marker}
 
 
 def take_prestart(path):
@@ -2262,7 +2579,20 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 		nonlocal observed_response
 		observed_response = raw  # immutable bounded envelope; no publication
 	streaming = route.get('response_format') == 'story-stream-v1'
+	if prestart:
+		prestart['job'] = job  # its tale's head is this job's (stream_head)
+		if prestart.get('tale') and not prestart['done'].is_set():  # a finished answer is written whole, as soon
+			stream_head(job, prestart['tale'])
+	def headed():
+		stream = streams.get(path)
+		return stream if stream and stream['request'] == request else None
 	def bound():
+		stream = headed()
+		if stream:
+			# Its head is held or written: the rest is bound to the head and its follow-on, not the page's state.
+			held = pend('').get(path)
+			return (not stream.get('stopped') and bool(held) and held[4] in (request, stream['next']) and
+				time.time()-job[2] < ANSWER_WAIT)
 		return (notebook_jobs.get(request) == job and pend('').get(path) == job and
 			answers.get(path) == 'waiting' and time.time()-job[2] < ANSWER_WAIT)
 	def current():
@@ -2272,6 +2602,8 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 				return False
 			if stop_reason is not None:
 				return False  # Returning to the page cannot revive an already-cancelled call.
+			if headed():
+				return True  # the head's own ink changes the page
 			stop_reason = model_page_stop_reason(context)
 			return stop_reason is None
 	def on_answer(chunk):
@@ -2311,11 +2643,14 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 			# (IRIS, 2026-10-30: a layout refusal, then a retry that wrote a number as a word.)
 			image_context = lesson_notes(image_context, path)
 			if not prestart and not waiting_send(path):
-				image_context = with_story(image_context, png, None, request, path)
+				image_context = with_story(image_context, png, None, request, path,
+					**({'head': lambda tale: stream_head(job, tale)} if lesson_rollout_config().get('stream') else {}))
 			attempt_context, refused_layout = image_context, False
-			for attempt in (1, 2, 3):
+			attempt, recoveries = 0, 0
+			while True:
+				attempt += 1
 				try:
-					if attempt == 1 and prestart:
+					if prestart:
 						# Asked while the Primer's pen wrote the question: this press's checks above, that answer.
 						prestart['current'] = current
 						trace.event('composed', 'prestarted', request=request, path=path, ready=prestart['done'].is_set())
@@ -2323,18 +2658,37 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 						observed_response = prestart['observed']
 						image_context = prestart.get('context') or image_context
 						attempt_context = image_context  # an answer the prestart did not finish is asked again with its tale
-						if isinstance(prestart['error'], ModelTransportError):
-							raise prestart['error']
-						if prestart['result'] is not None and current():
-							result = prestart['result']
+						taken, prestart = prestart, None
+						if isinstance(taken['error'], ModelTransportError):
+							raise taken['error']
+						if taken['result'] is not None and current():
+							result = taken['result']
+							told_as_written(result, attempt_context, attempt)
 							break
 					result = call_notebook_model(route['socket'], request, png,
 						attempt_context,
 						deadline_ms=route['deadline_ms'], is_current=current, observe_response=observe_response)
+					told_as_written(result, attempt_context, attempt)
 					break
 				except ModelTransportError as error:
+					# A desk that is busy, restarting or dropped the line has not answered: ask again by itself while
+					# the page is unchanged (James, 2026-11-01: "Notebook model busy; reply held" left him a Respond
+					# button). Ten tries over about two minutes; the checker's three tries are counted apart.
+					if error.code in TRANSIENT_MODEL_ERRORS and recoveries < 10 and current():
+						recoveries += 1
+						attempt -= 1
+						trace.event('composed', 'recovering', request=request, path=path, code=error.code, attempt=recoveries)
+						observed_response = None
+						time.sleep(min(20, 2*recoveries))
+						continue
 					semantic_rejected = error.code in ('invalid_response','invalid_json') and observed_response is not None
 					detail = getattr(error, 'detail', None)
+					fallback = semantic_rejected and attempt >= 2 and current() and tale_lesson(path, request)
+					if fallback and current():
+						trace.event('composed', 'from tale', request=request, path=path, reason=detail)
+						result, semantic_rejected = fallback, False
+						observed_response = json.dumps({k: v for k, v in fallback.items() if k != 'parsed'}).encode()
+						break
 					if attempt == 3 or not semantic_rejected or not detail or not current():
 						raise
 					trace.event('composed', 'retry', request=request, path=path, reason=detail)
@@ -2352,6 +2706,15 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 			intent=reply.get('intent') if isinstance(reply, dict) else None,
 			labels_left_out=[text for _, text in (parsed.get('plan') or {}).get('dropped_labels', [])] or None)
 		waiting = None
+		if headed() and parsed.get('mode') != 'lesson':
+			# Its head is on the page: the rest is the tale's, never a plain answer or a message to send under it.
+			told = tale_rest(path, request)
+			trace.event('composed', 'from tale' if told else 'no rest', request=request, path=path, mode=parsed.get('mode'))
+			if not told:
+				raise ModelTransportError('invalid_response')
+			result, parsed = told, told['parsed']
+			reply = json.loads(told['text'])
+			observed_response = json.dumps({k: v for k, v in told.items() if k != 'parsed'}).encode()
 		if parsed.get('mode') in ('send', 'confirm'):
 			text, waiting = page_send(parsed, request, path, current)
 			result['text'] = json.dumps({'v': 1, 'mode': 'answer', 'text': text})
@@ -2360,7 +2723,12 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 				observed_response = json.dumps(dict(json.loads(observed_response), text=result['text'])).encode()
 		if observed_response is not None:
 			keep_reply(request, observed_response)
-		if (parsed.get('mode') == 'lesson' and 'picture' not in parsed and
+		early = take_early_picture(path, reply) if parsed.get('mode') == 'lesson' else None
+		if early:
+			parsed.pop('picture_refused', None)
+			reply['picture'] = parsed['picture'] = early['picture']
+			result['text'] = json.dumps(reply)
+		if (not early and parsed.get('mode') == 'lesson' and 'picture' not in parsed and
 				isinstance(reply, dict) and lesson_rollout_config().get('picture') == 'image'):
 			# A picture the checker refused (IRIS reply, 2026-10-30: wrong edit count) is directed afresh, like a missing one.
 			refused = parsed.pop('picture_refused', None)
@@ -2371,7 +2739,11 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 			if directed:
 				reply['picture'] = parsed['picture'] = directed
 				result['text'] = json.dumps(reply)
-		if parsed.get('picture') and lesson_rollout_config().get('picture') == 'image':
+		if early:
+			notebook_image_model.keep(request, early['frames'], dict(early['picture'], scenes=SCENES))
+			trace.event('picture', 'from tale', request=request, path=path, frames=len(early['frames']),
+				labels=early['labels'])
+		elif parsed.get('picture') and lesson_rollout_config().get('picture') == 'image':
 			# Render now, off the tablet's request; preparation later reads only the cached frames.
 			drawn = time.monotonic()
 			try:
@@ -2385,6 +2757,9 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 		with pending_lock:
 			if not current():
 				raise ModelTransportError('cancelled')
+			if headed():
+				stream_rest(path, headed(), result['text'])
+				return
 			notebook_reply(request, result['text'])
 			if waiting:
 				pending_sends[path] = waiting
@@ -2399,7 +2774,12 @@ def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_C
 		with pending_lock:
 			if streaming and request in notebook_answer_streams:
 				notebook_answer_streams[request]['stopped'] = True
-			if bound():
+			if pend('').get(path) == job or headed() and bound():  # no newer request on this page owns the picture
+				early_pictures.pop(path, None)
+			if headed() and bound():
+				code = error.code if isinstance(error,ModelTransportError) else 'invalid_response'
+				stream_rest(path, headed(), error=f'Rest of the story failed: notebook model {code}; its start is on the page')
+			elif bound():
 				answers[path] = 'failed'
 				code = error.code if isinstance(error,ModelTransportError) else 'invalid_response'
 				if semantic_rejected:
@@ -2550,6 +2930,9 @@ def claim_native_ink(body):
 	job = native_ink_current(body.get('request'))
 	result = native_ink_runs.claim(body, device_context.snapshot, native_ink_preflight)
 	reply_timings.setdefault(job[1], {})['ink_'+body['scene']+'_'+body['stage']+'_claimed'] = time.monotonic()
+	# herd-board-primer says each paragraph as its handwriting starts
+	trace.event('ink_claimed', 'ok' if result.get('claimed') else 'refused', request=body.get('request'),
+		scene=body.get('scene'), block_stage=body.get('stage'), opens=(hand_passages.get(body.get('scene')) or hand_passages.get(f"{body.get('scene')}/{body.get('stage')}") or '')[:60] or None)
 	return result
 
 
@@ -2582,6 +2965,32 @@ def native_ink_proof(request, layout=None):
 	trace.event('ink_proof', proof['state'], request=request,
 		reason=proof.get('reason') or ('measure layout' if 'measure_layout' in proof else None), strokes=proof.get('strokes'))
 	return proof
+
+
+def native_text_left(path, request):
+	"""James turned the page after every drawing stage had committed, before its save could be proven: the proof
+	re-measures the reply's own page. The reply is written, so it ends as left, not failed (2026-11-01 22:20 and
+	22:25 were failed this way). Nothing is claimed saved and no input baseline is kept."""
+	with pending_lock:
+		job = pend('').get(path)
+		if not job or len(job) < 7 or request != job[4] or path not in ready:
+			raise ValueError('no reply is being written for that page')
+	try:
+		committed = native_ink_runs.committed(request)
+	except (OSError, ValueError):
+		committed = False
+	if not committed:
+		raise ValueError('the drawing had not finished; inspect the page')
+	with pending_lock:
+		if pend('').get(path) != job:
+			raise ValueError('no reply is being written for that page')
+		answers[path] = 'left'
+		reply_errors.pop(path, None)
+		ready.pop(path, None)
+		pend(path)
+		trace.event('acknowledged', 'left', request=request, path=path, timing=timing_status(path))
+	tale_told(path, request)
+	return {'state': 'left', 'page': path}
 
 
 def matching_native_attempt(job):
@@ -3256,8 +3665,10 @@ class Handler(BaseHTTPRequestHandler):
 				self.reply(200, native_ink_proof(str(q.get("request", "")), q.get('layout')))
 			elif self.path == "/native-text-done":
 				self.reply(200, native_text(str(q.get("page", "")), str(q.get("request", "")), done=True))
+			elif self.path == "/native-text-left":
+				self.reply(200, native_text_left(str(q.get("page", "")), str(q.get("request", ""))))
 			elif self.path == "/native-text-failed":
-				self.reply(200, native_text_failed(str(q.get("page", "")), str(q.get("request", ""))))
+				self.reply(200, native_text_failed(str(q.get("page", "")), str(q.get("request", "")), q.get("untouched") is True))
 			elif self.path == "/notebook-media-proof":
 				self.reply(200, native_media_proof(str(q.get("page", "")), str(q.get("request", "")), q.get("assets")))
 			elif self.path == "/respond":
@@ -3282,6 +3693,8 @@ class Handler(BaseHTTPRequestHandler):
 				trace.event(TRACED_POSTS[self.path], 'failed', request=str(q.get('request') or '') or None,
 					path=str(q.get('page') or '') or None, reason=f'{type(e).__name__}: {e}')
 			print(f"{time.strftime('%H:%M:%S')} POST {self.path}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+			if not isinstance(e, ValueError):  # a bug, not a refusal: where it happened (ab29bbaa had only the message)
+				traceback.print_exc(limit=6, file=sys.stderr)
 			self.reply(400 if isinstance(e, ValueError) else 500, {"error": str(e)})
 
 	def log_message(self, *a):
@@ -3289,7 +3702,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # The native endpoints the tablet calls after a Respond, and the stage each one is: a failure there is traced.
-TRACED_POSTS = {'/native-text': 'placed', '/native-text-done': 'acknowledged', '/native-text-failed': 'written',
+TRACED_POSTS = {'/native-text': 'placed', '/native-text-done': 'acknowledged', '/native-text-left': 'acknowledged', '/native-text-failed': 'written',
 	'/native-ink-claim': 'written', '/native-ink-done': 'written', '/notebook-ink-proof': 'written',
 	'/notebook-media-proof': 'written', '/write-live': 'written'}
 

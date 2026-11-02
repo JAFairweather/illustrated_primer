@@ -4,7 +4,7 @@ import json
 import copy
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from PIL import Image
 
@@ -88,6 +88,19 @@ class NativeInkPreflightTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'current writing reply'):
                 self.server.claim_native_ink({'request':'notebook-'+'a'*32})
             remote.assert_not_called()
+
+    def test_each_claim_is_traced_with_its_scene_for_the_narrator(self):
+        body = {'request':'notebook-'+'a'*32,'scene':'hand-abc','stage':'hand'}
+        with patch.object(self.server,'native_ink_current',return_value=('page',body['request'])), \
+             patch.object(self.server.native_ink_runs,'claim',return_value={'claimed':True}), \
+             patch.dict(self.server.hand_passages,{'hand-abc':'Weeks later, Pip got a thorn in her paw, and Marmalade was surprised.'}), \
+             patch.object(self.server.trace,'event') as event:
+            self.server.claim_native_ink(body)
+            self.server.claim_native_ink(dict(body,scene='hand-def'))
+        self.assertEqual(event.call_args_list,[
+            call('ink_claimed','ok',request=body['request'],scene='hand-abc',block_stage='hand',
+                 opens='Weeks later, Pip got a thorn in her paw, and Marmalade was s'),
+            call('ink_claimed','ok',request=body['request'],scene='hand-def',block_stage='hand',opens=None)])
 
     def test_compiled_equation_uses_bounded_region_and_lesson_rollout(self):
         from notebook_lesson_native import native_semantic_bundle

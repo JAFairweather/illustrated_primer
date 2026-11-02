@@ -25,7 +25,7 @@ function setup(text='This is 2/3.\n', gap=false, nativeCursor=false, options={})
     herdTypingTimer:{restart(){active=true;},stop(){active=false;}},
     herdLater(f){queue.push(f);},herdTextDone(){done++;},SceneController:{MoveAnchor:0},
     SceneParticipant:{RequestedByInputMethod:2},Date:{now(){return now;}},Qt:{point(x,y){return{x,y};}}});
-  vm.runInContext(['herdTypingUnits','herdStartTyping','herdStopTyping','herdTypingCompleted','herdTypingTick'].map(definition).join('\n'),ctx);
+  vm.runInContext(['herdPenNear','herdPenHold','herdTypingUnits','herdStartTyping','herdStopTyping','herdTypingCompleted','herdTypingTick'].map(definition).join('\n'),ctx);
   ctx.herdStartTyping({job,nativeGap:gap,...options},text);
   let first=true,ticks=0;
   function tick(apply=true, elapsed=40) {
@@ -57,7 +57,17 @@ for(const gap of [false,true]) {
   s.finish();assert.deepEqual(s.errors,[]);
   assert.equal(s.buffer,s.original+(gap?'\n\n':'')+'Hello, café!\n');assert.equal(s.done,1);
 }
-for(const change of ['page','job','surface','ink','pen','suspend','selection','state','controller','text','timeout']) {
+{ // A pen near the page pauses the typing; it resumes when the pen has been away 1.5 s.
+  const s=setup();s.tick();s.tick();const count=s.writes.length;
+  s.ctx.sceneView.penClose=true;for(let i=0;i<50;i++)s.tick();
+  assert.equal(s.writes.length,count,'nothing typed while the pen is near');assert.deepEqual(s.errors,[]);
+  s.ctx.sceneView.penClose=false;s.finish();assert.deepEqual(s.errors,[]);assert.equal(s.done,1);
+  assert.equal(s.buffer,s.original+'This is 2/3.\n');
+  const held=setup();held.tick();held.tick();const n=held.writes.length;
+  held.ctx.sceneView.penClose=true;held.finish();
+  assert.equal(held.writes.length,n);assert.equal(held.errors.length,1,'a pen left near for a minute holds the reply');
+}
+for(const change of ['page','job','surface','ink','suspend','selection','state','controller','text','timeout']) {
   const s=setup();s.tick();s.tick();
   const count=s.writes.length;
   if(change==='page')s.ctx.herdPage='other';
@@ -169,7 +179,12 @@ for(const change of ['page','job','surface','ink','revision','length','cursor','
   if(change==='suspend')s.ctx.root.inSuspend=true;
   if(change==='busy')s.editor.working=true;
   if(change==='state')s.ctx.navigator.herdState='failed';
-  s.flush();assert.equal(records.length,0,change);assert.equal(s.errors.length,1,change);
+  s.flush();assert.equal(records.length,0,change);
+  if(change==='pen'){ // the acknowledgement waits for the pen to leave, then settles
+    assert.deepEqual(s.errors,[],change);s.ctx.sceneView.penClose=false;s.flush();
+    assert.equal(records.length,1,change);assert.deepEqual(s.errors,[],change);continue;
+  }
+  assert.equal(s.errors.length,1,change);
   assert.equal(s.writes.length,count,change);assert.equal(s.done,0,change);
 }
 let calls=0;

@@ -7,6 +7,7 @@ are untrusted pixels; only the resulting pen paths, bounded by the native stage 
 import hashlib
 import io
 import math
+import re
 
 import numpy as np
 from PIL import Image
@@ -304,10 +305,48 @@ def budget(paths, points=STAGE_POINTS, strokes=STAGE_STROKES):
 
 
 LABEL_SIZE, LABEL_GAP = 20, 12  # lettered label height and its clearance from ink, in plan units
+BUBBLE_PAD, BUBBLE_WIDTH, BUBBLE_LEAD = 10, 260, 1.45  # a speech bubble's inner margin, widest line, line spacing
 
 
-def _label_rect(x, y, w):
-    return (x, y, x+w, y+LABEL_SIZE)
+def _label_rect(x, y, w, h=LABEL_SIZE):
+    return (x, y, x+w, y+h)
+
+
+def speech(name):
+    """A character's words, (speaker, words), when a label is written 'Speaker: "words"'; else None."""
+    m = re.fullmatch(r'\s*([^:"\u201c\u201d]{1,30}?)\s*:\s*(?:["\u201c](.{1,60}?)["\u201d]|\'(.{1,60}?)\')\s*', name)
+    return (m.group(1), m.group(2) or m.group(3)) if m else None
+
+
+def _letter(text):
+    """Glyph paths and advance for text at LABEL_SIZE, in the hand labels use (label_hand in the rollout config)."""
+    import notebook_lesson
+    from notebook_plotter_font import label_paths
+    if notebook_lesson.label_hand == 'plotter':
+        return label_paths(text, LABEL_SIZE)
+    from notebook_handwriting import handwriting_paths
+    return handwriting_paths(text, LABEL_SIZE, hand=notebook_lesson.label_hand)
+
+
+def _bubble_lines(words):
+    """The words lettered in lines no wider than BUBBLE_WIDTH: [(glyph paths, advance)]."""
+    lines, current = [], ''
+    for word in words.split():
+        trial = f'{current} {word}' if current else word
+        if current and _letter(trial)[1] > BUBBLE_WIDTH:
+            lines.append(current)
+            current = word
+        else:
+            current = trial
+    return [_letter(line) for line in lines+[current]]
+
+
+def _rounded(x0, y0, x1, y1, r=12):
+    """One closed pen path around a rectangle with rounded corners."""
+    path = []
+    for cx, cy, start in ((x1-r, y0+r, -90), (x1-r, y1-r, 0), (x0+r, y1-r, 90), (x0+r, y0+r, 180)):
+        path += [(cx+r*math.cos(math.radians(start+a)), cy+r*math.sin(math.radians(start+a))) for a in (0, 30, 60, 90)]
+    return path+path[:1]
 
 
 def _free(rect, ink, taken, width, height):
@@ -324,14 +363,19 @@ def place_labels(names, boxes, ink, width=WIDTH, height=HEIGHT, taken=None):
     """Pen paths lettering each name in clear space beside its box, with a short line pointing at the box, and the
     rects they take. ink is the finished picture's mask; taken, the rects earlier labels hold. A name with no box, or
     no clear space within reach, is left out."""
-    from notebook_plotter_font import label_paths
     taken, paths, placed = list(taken or []), [], []
     for name in names:
         if name not in boxes:
             continue
         bx0, by0, bx1, by1 = boxes[name]
-        glyphs, w = label_paths(name, LABEL_SIZE)
         cx, cy = (bx0+bx1)/2, (by0+by1)/2
+        said = speech(name)
+        if said:
+            placed_name = _place_bubble(name, said[1], boxes[name], ink, taken, width, height, paths)
+            if placed_name:
+                placed.append(name)
+            continue
+        glyphs, w = _letter(name)
         spot = None
         for reach in (LABEL_GAP, 40, 80, 130):
             for x, y in ((bx1+reach, cy-LABEL_SIZE/2), (bx0-reach-w, cy-LABEL_SIZE/2), (cx-w/2, by0-reach-LABEL_SIZE),
@@ -362,6 +406,44 @@ def place_labels(names, boxes, ink, width=WIDTH, height=HEIGHT, taken=None):
         if pointer:
             paths.append(pointer)
     return paths, taken, placed
+
+
+def _place_bubble(name, words, box, ink, taken, width, height, paths):
+    """A speech bubble holding words beside the speaker's box, above it if there is room, with a tail pointing at the
+    speaker; appended to paths and its rect to taken. False when no clear space is in reach."""
+    try:
+        lines = _bubble_lines(words)
+    except ValueError:
+        return False
+    w = max(advance for _, advance in lines)+2*BUBBLE_PAD
+    h = (len(lines)-1)*LABEL_SIZE*BUBBLE_LEAD+LABEL_SIZE+2*BUBBLE_PAD
+    bx0, by0, bx1, by1 = box
+    cx, cy = (bx0+bx1)/2, (by0+by1)/2
+    for reach in (LABEL_GAP+24, 50, 90, 130):
+        spots = ((cx-w/2, by0-reach-h), (bx1+reach, by0-reach-h), (bx0-reach-w, by0-reach-h),
+                 (bx1+reach, cy-h/2), (bx0-reach-w, cy-h/2), (cx-w/2, by1+reach))
+        spot = next(((x, y) for x, y in spots if _free(_label_rect(x, y, w, h), ink, taken, width, height)), None)
+        if spot:
+            break
+    else:
+        return False
+    x, y = spot
+    rect = _label_rect(x, y, w, h)
+    paths.append(_rounded(*rect))
+    for row, (glyphs, advance) in enumerate(lines):
+        ox, oy = x+(w-advance)/2, y+BUBBLE_PAD+row*LABEL_SIZE*BUBBLE_LEAD
+        paths += [[(ox+px, oy+py) for px, py in glyph] for glyph in glyphs]
+    # The tail leaves the bubble's edge nearest the speaker and stops short of the speaker's ink.
+    ex, ey = min(max(cx, rect[0]+16), rect[2]-16), min(max(cy, rect[1]), rect[3])
+    tx, ty = _nearest_ink(ink, box, (ex, ey))
+    gap = math.dist((ex, ey), (tx, ty))
+    if gap > 2*LABEL_GAP:
+        ux, uy = (tx-ex)/gap, (ty-ey)/gap
+        tip = (ex+ux*min(gap-8, 45), ey+uy*min(gap-8, 45))
+        along = (1, 0) if ey in (rect[1], rect[3]) else (0, 1)
+        paths.append([(ex-9*along[0], ey-9*along[1]), tip, (ex+9*along[0], ey+9*along[1])])
+    taken.append(rect)
+    return True
 
 
 def _nearest_ink(ink, box, point):
@@ -429,7 +511,8 @@ def raster_plan(frames, captions, width=WIDTH, height=HEIGHT, total=PICTURE_POIN
         # Two names the vision model located on the same thing (both arms on the whole plank) would point at nothing
         # in particular, so only the first keeps it.
         named = [(n, fits[index](b)) for n, b in named]
-        named = [(n, b) for i, (n, b) in enumerate(named) if not any(_overlap(b, c) > .8 for _, c in claimed+named[:i])]
+        named = [(n, b) for i, (n, b) in enumerate(named)
+                 if speech(n) or not any(_overlap(b, c) > .8 for _, c in claimed+named[:i])]  # a speaker may be named too
         claimed += named
         if named:
             lettered, held, placed = place_labels([n for n, _ in named], dict(named), drawn_ink,

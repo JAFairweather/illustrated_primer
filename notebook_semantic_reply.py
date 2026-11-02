@@ -13,8 +13,9 @@ from notebook_semantic import MAX_BYTES, SemanticError, compile_semantic
 
 def _labels(labels,frames):
     """A picture's labels, one list of up to 3 short words per frame, or None: labels the pen cannot letter are left
-    off rather than costing the picture."""
+    off rather than costing the picture. A label written 'Name: "words"' is a speech bubble, one per frame."""
     from notebook_plotter_font import label_paths
+    from notebook_raster_ink import speech, _bubble_lines
     if not isinstance(labels,list) or len(labels)!=frames or not all(isinstance(f,list) for f in labels):
         return None
     kept=[]
@@ -22,7 +23,11 @@ def _labels(labels,frames):
         kept.append([])
         for text in texts:
             try:
-                if len(kept[-1])<3 and isinstance(text,str) and 1<=len(text.strip())<=20:
+                said=speech(text) if isinstance(text,str) else None
+                if said and len(kept[-1])<3 and not any(speech(k) for k in kept[-1]) and len(said[1].split())<=8:
+                    _bubble_lines(said[1])
+                    kept[-1].append(text.strip())
+                elif not said and len(kept[-1])<3 and isinstance(text,str) and 1<=len(text.strip())<=20:
                     label_paths(text.strip(),20)
                     kept[-1].append(text.strip())
             except ValueError:
@@ -54,7 +59,15 @@ def _picture(picture,stages):
     for text,limit in [(base,400)]+[(e,300) for e in edits if e != '']:
         if not isinstance(text,str) or not 3<=len(text.strip())<=limit or any(ord(c)<32 for c in text):
             raise ValueError('picture descriptions are short plain sentences')
-    labels=_labels(picture.get('labels'),frames)
+    labels=picture.get('labels')
+    if isinstance(labels,list) and len(labels)!=frames:
+        # The director miscounts now and then (parrots, 11-02: 5 lists for 6 steps cost the picture every label). A
+        # list per drawn frame goes to those frames; otherwise they line up from the first. A label the locator
+        # cannot find in its frame is left out, so a misplaced one costs nothing.
+        drawn=[0]+[i+1 for i,e in enumerate(edits) if e!='']
+        labels=([labels[drawn.index(f)] if f in drawn else [] for f in range(frames)] if len(labels)==len(drawn)
+                else (labels+[[]]*frames)[:frames])
+    labels=_labels(labels,frames)
     return dict(base=_solid(base),edits=[_solid(e) for e in edits],**({'captions':captions} if captions is not None else {}),
                 **({'labels':labels} if labels is not None else {}))
 

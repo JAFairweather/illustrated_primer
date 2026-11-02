@@ -12,6 +12,12 @@ import warnings
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from notebook_plotter_font import GLYPHS
+
+# \alpha .. \Omega as the pen font draws them; the bundled Pillow font (Aileron) has no Greek.
+GREEK = dict(zip(('alpha beta gamma delta epsilon zeta eta theta lambda mu nu xi pi rho sigma tau phi chi psi omega '
+                  'Gamma Theta Lambda Pi Phi Psi Omega').split(), 'αβγδεζηθλμνξπρστφχψωΓΘΛΠΦΨΩ'))
+
 MAX_BYTES, MAX_PIXELS = 12_000_000, 20_000_000
 KINDS = {"photo", "illustration", "diagram", "equation"}
 MATH_PATTERN = r"```(?:math|latex)\s*\n?(.*?)```|\\\[(.*?)\\\]|\$\$(.*?)\$\$|\\\((.*?)\\\)"
@@ -209,8 +215,29 @@ def glyph(text, size):
     # The bundled Pillow font is available even inside the agent's sandbox.
     font = ImageFont.load_default(size=max(10, int(size)))
     ascent, descent = font.getmetrics()
+    if any(char in GREEK.values() for char in text):
+        return _stroked(text, font, ascent, descent)
     out = canvas(math.ceil(font.getlength(text)) + 4, ascent + descent + 4, ascent + 2)
     ImageDraw.Draw(out.image).text((2, out.baseline), text, font=font, fill=0, anchor="ls")
+    return out
+
+
+def _stroked(text, font, ascent, descent):
+    """text with its Greek letters drawn from the pen font's strokes (cap height 0..6, descenders to 8)."""
+    scale = ascent/8.5  # the grid's 6 units span the font's cap height
+    width = sum(scale*5.4 if char in GREEK.values() else font.getlength(char) for char in text)
+    out = canvas(math.ceil(width) + 4, ascent + descent + 4, ascent + 2)
+    draw, x = ImageDraw.Draw(out.image), 2.0
+    for char in text:
+        if char not in GREEK.values():
+            draw.text((x, out.baseline), char, font=font, fill=0, anchor="ls")
+            x += font.getlength(char)
+            continue
+        for stroke in GLYPHS[char].split(';'):
+            points = [tuple(map(float, p.split(','))) for p in stroke.split()]
+            draw.line([(x+px*scale, out.baseline-6*scale+py*scale) for px, py in points], fill=0,
+                      width=max(2, round(scale*.45)), joint='curve')
+        x += scale*5.4
     return out
 
 
@@ -430,6 +457,8 @@ class Equation:
                 return self.render['integral'](size)
             if command in ('Delta', 'sum', 'cdots', 'ldots', 'approx', 'Rightarrow'):
                 return self.render['math_symbol'](command, size)
+            if command in GREEK:
+                return self.render['glyph'](GREEK[command], size)
             if command in ("sin", "cos", "tan", "ln", "log", "exp"):
                 return self.render['glyph'](command, size)
             if command in ('text', 'mathrm'):
@@ -453,6 +482,8 @@ class Equation:
             return self.render['math_symbol']('cdots' if char == '⋯' else 'ldots', size)
         if char in ('≈', '⇒'):
             return self.render['math_symbol']('approx' if char == '≈' else 'Rightarrow', size)
+        if char in GREEK.values():
+            return self.render['glyph'](char, size)
         if not char.isascii() or char in "}^_\n\r\t":
             raise ValueError("unsupported equation character")
         return self.render['glyph'](char, size)

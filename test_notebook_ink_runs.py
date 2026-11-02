@@ -162,8 +162,9 @@ class InkRunsTest(unittest.TestCase):
     def test_changed_page_ink_or_revision_and_changed_during_io_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             store,context,query,blocks = self.setup_run(directory)
-            for change in ({'fresh':False},{'page':DOC},{'ink_revision':5},{'content_revision':9}):
-                with self.assertRaises(ValueError):
+            for change,named in (({'fresh':False},'fresh'),({'page':DOC},'page'),({'ink_revision':5},'ink_revision'),
+                                 ({'content_revision':9},'content_revision')):
+                with self.assertRaisesRegex(ValueError,'changed: '+named+'$'):
                     store.claim(query,lambda:dict(context,**change),lambda *args:self.fail('preflight should not run'))
             changed = copy.deepcopy(context)
             def preflight(*args):

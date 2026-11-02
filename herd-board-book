@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""herd-board-book NOTEBOOK [FIRST-LAST] [-o FILE]: a notebook's pages as an illustrated book (PDF).
+
+NOTEBOOK is a notebook's name on the tablet (or the start of its id); FIRST-LAST picks pages, counted from 1. Every
+pen stroke on each page is drawn, James's and the Primer's alike, in page order after a title sheet; a tall page is cut
+into sheets and blank sheets are left out. Typed text and imported pictures are not on the strokes layer and are not
+drawn. Read-only on the tablet. Written to ~/.cache/herd-board/books/ unless -o names a file."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import tarfile
+import time
+
+from PIL import Image, ImageDraw, ImageFont
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+from ink import ERASERS, MARKERS, strokes
+
+XOCHITL = '/home/root/.local/share/remarkable/xochitl'
+TABLET = os.environ.get('HERD_BOARD_TABLET', 'root@remarkable.lan')
+WIDTH, HEIGHT = 1404, 1872  # one tablet screen, the book's sheet
+BOOKS = os.path.expanduser('~/.cache/herd-board/books')
+TITLE_FONT = '/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf'
+
+
+def tablet(script):
+    r = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', TABLET, script], capture_output=True,
+                       timeout=120, env={**os.environ, 'SSH_AUTH_SOCK': os.path.expanduser('~/.ssh/s/r1-agent.sock')})
+    if r.returncode == 255:
+        raise SystemExit("the tablet isn't answering")
+    return r.stdout
+
+
+def find(name):
+    """The id and name of the one notebook called name (or whose id starts with it)."""
+    found = []
+    listing = tablet(f'cd {XOCHITL} && for m in *.metadata; do echo "${{m%.metadata}} $(tr -d "\\n" < $m)"; done')
+    for line in listing.decode(errors='replace').splitlines():
+        doc, _, meta = line.partition(' ')
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            continue
+        if meta.get('type') == 'DocumentType' and not meta.get('deleted') and meta.get('parent') != 'trash' and (
+                doc.startswith(name) or meta.get('visibleName', '').lower() == name.lower()):
+            found.append((doc, meta.get('visibleName', doc)))
+    if len(found) != 1:
+        raise SystemExit(f'{len(found)} notebooks match {name!r}' + ''.join(f'\n  {d}  {n}' for d, n in found))
+    return found[0]
+
+
+def order(content):
+    """Page ids in reading order, from the notebook's .content (cPages in format 2, pages before it)."""
+    pages = (content.get('cPages') or {}).get('pages')
+    if pages is not None:
+        return [p['id'] for p in pages if isinstance(p, dict) and 'id' in p and not p.get('deleted')]
+    return list(content.get('pages') or [])
+
+
+def sheets(data):
+    """The page's strokes drawn at screen scale, cut into WIDTH x HEIGHT sheets at blank bands so no drawing or line
+    of words is split; blank sheets left out."""
+    lines = [(tool, points) for tool, points, _ in strokes(data) if tool not in ERASERS and points]
+    if not lines:
+        return []
+    ys = [y for _, points in lines for _, y, _ in points]
+    top = min(0, min(ys)-40)  # ink above the page's first screen
+    page = Image.new('L', (WIDTH, max(HEIGHT, int(max(ys)-top)+80)), 255)
+    draw = ImageDraw.Draw(page)
+    for tool, points in lines:
+        highlight = tool in MARKERS
+        width = 24 if highlight else max(2, round(sum(w for _, _, w in points)/len(points)))
+        xy = [(x+WIDTH/2, y-top) for x, y, _ in points]
+        if len(xy) == 1:
+            xy = xy*2
+        draw.line(xy, fill=200 if highlight else 0, width=width, joint='curve')
+    inked = [min(row) < 128 for row in (page.crop((0, y, WIDTH, y+1)).getdata() for y in range(page.height))]
+    out, start = [], 0
+    while start < page.height:
+        end = min(start+HEIGHT, page.height)
+        if end < page.height:  # the lowest 24-row blank band in the sheet's lower 40%
+            end = next((y for y in range(end, start+int(HEIGHT*.6), -1) if not any(inked[y-24:y])), end)
+        sheet = Image.new('L', (WIDTH, HEIGHT), 255)
+        sheet.paste(page.crop((0, start, WIDTH, end)), (0, 0))
+        out.append(sheet)
+        start = end
+    return [s for s in out if s.getextrema()[0] < 128]
+
+
+def title(name, reader, dates):
+    sheet = Image.new('L', (WIDTH, HEIGHT), 255)
+    draw = ImageDraw.Draw(sheet)
+    try:
+        big, small = ImageFont.truetype(TITLE_FONT, 110), ImageFont.truetype(TITLE_FONT, 54)
+    except OSError:
+        big = small = ImageFont.load_default()
+    for text, font, y in ((name, big, 640), (f'told by the Primer to {reader}', small, 820), (dates, small, 900)):
+        w = draw.textbbox((0, 0), text, font=font)[2]
+        draw.text(((WIDTH-w)/2, y), text, font=font, fill=0)
+    draw.rectangle((180, 560, WIDTH-180, 1000), outline=0, width=4)
+    return sheet
+
+
+def main(argv):
+    out = None
+    if '-o' in argv:
+        i = argv.index('-o')
+        out, argv = argv[i+1], argv[:i]+argv[i+2:]
+    if not argv:
+        raise SystemExit(__doc__)
+    doc, name = find(argv[0])
+    raw = tablet(f'cd {XOCHITL} && tar -cf - {doc}.content $(ls {doc}/*.rm 2>/dev/null)')
+    files, when = {}, {}
+    with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+        for member in tar.getmembers():
+            files[member.name] = tar.extractfile(member).read()
+            when[member.name] = member.mtime
+    ids = [p for p in order(json.loads(files[f'{doc}.content'])) if f'{doc}/{p}.rm' in files]
+    first, last = 1, len(ids)
+    if len(argv) > 1:
+        m = re.fullmatch(r'(\d+)(?:-(\d+))?', argv[1])
+        if not m:
+            raise SystemExit('pages are FIRST-LAST, counted from 1')
+        first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+    chosen = ids[first-1:last]
+    book = []
+    for page in chosen:
+        book += sheets(files[f'{doc}/{page}.rm'])
+    if not book:
+        raise SystemExit('nothing is written on those pages')
+    stamps = sorted(when[f'{doc}/{p}.rm'] for p in chosen)
+    day = lambda t: time.strftime('%B %-d, %Y', time.localtime(t))
+    dates = day(stamps[0]) if day(stamps[0]) == day(stamps[-1]) else f'{day(stamps[0])} - {day(stamps[-1])}'
+    reader = os.environ.get('HERD_BOARD_READER', 'James')
+    book.insert(0, title(name, reader, dates))
+    if not out:
+        os.makedirs(BOOKS, exist_ok=True)
+        out = os.path.join(BOOKS, f"{re.sub(r'[^A-Za-z0-9]+', '-', name).strip('-')}-{time.strftime('%Y%m%d')}.pdf")
+    book[0].save(out, 'PDF', resolution=226, save_all=True, append_images=book[1:])
+    print(f'{len(chosen)} pages, {len(book)-1} sheets -> {out}')
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

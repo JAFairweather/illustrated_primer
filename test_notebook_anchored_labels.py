@@ -133,7 +133,6 @@ class AnchoredLabelTests(unittest.TestCase):
             lambda s:s[0]['draw'][1].update(size=12),
             lambda s:s[0]['draw'][1].update(text=''),
             lambda s:s[0]['draw'][1].update(url='https://example.org'),
-            lambda s:s[0]['draw'].extend([{'op':'label','target':'region','text':'A'}]*12),
             lambda s:s[0]['draw'][0].update(origin=[601,100])]
         for change in changes:
             source=steps();change(source)
@@ -215,6 +214,18 @@ class AnchoredLabelTests(unittest.TestCase):
                                      [c for c in after['draw'] if c['op']!='label'])
 
 
+class LabelCountTests(unittest.TestCase):
+    def test_past_twelve_labels_the_rest_are_left_out_rather_than_refused(self):
+        dots=[{'op':'circle','id':f'dot-{i}','center':[60+(i%7)*80,90+(i//7)*150],'radius':12} for i in range(13)]
+        many=[{'caption':'Thirteen dots.','draw':dots},
+              {'caption':'Each named.','draw':[{'op':'label','target':f'dot-{i}','text':f'D{i}'} for i in range(13)]}]
+        with self.assertRaisesRegex(ValueError,'twelve'):
+            resolve_labels(copy.deepcopy(many))
+        dropped=[]
+        resolve_labels(copy.deepcopy(many),dropped)
+        self.assertIn(('step 2 command 13','D12'),dropped)
+
+
 class CaptionLengthTests(unittest.TestCase):
     def test_a_long_story_episode_is_a_caption_and_the_writer_clips_to_the_same_limit(self):
         # The 07:01 raven on 2026-11-01 was held: Opus's first episode was 300 characters, the schema allowed 280.
@@ -225,8 +236,17 @@ class CaptionLengthTests(unittest.TestCase):
         self.assertGreater(len(episode),280)
         source=steps(); source[0]=dict(source[0],caption=episode)
         self.assertEqual(compile_lesson(source,'Ravens plan ahead.')['stages'][0]['text'],episode)
-        tale=gm._tale({'steps':[{'caption':'x'*500,'see':''}]*3,'takeaway':'t'},'Once upon a time')
-        self.assertEqual(len(tale['steps'][0]['caption']),gm.CAPTION)
+        tale=gm._tale({'steps':[{'caption':'x '*250,'see':''}]*3,'takeaway':'t'},'Once upon a time')
+        self.assertLessEqual(len(tale['steps'][0]['caption']),gm.CAPTION)
+        self.assertTrue(tale['steps'][0]['caption'].endswith('x\u2026'))
+        # A long takeaway keeps its closing question whole, or ends on its last whole sentence, never mid-word.
+        ending=('The rioters were mostly driven by the false belief that the election was stolen. '*5+
+                'Why do you think one person was given a power that no court can undo?')
+        tale=gm._tale({'steps':[{'caption':'x','see':''}]*3,'takeaway':ending},'Once upon a time')
+        self.assertLessEqual(len(tale['takeaway']),500)
+        self.assertTrue(tale['takeaway'].endswith('?'))
+        tale=gm._tale({'steps':[{'caption':'x','see':''}]*3,'takeaway':'One sentence. '*40},'Once upon a time')
+        self.assertTrue(tale['takeaway'].endswith('sentence.'))
 
 
 if __name__=='__main__':unittest.main()

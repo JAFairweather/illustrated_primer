@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 
 from notebook_model_transport import model_request, ModelTransportError
+from tablet_live import writing_box
 from notebook_visual_input import notebook_visual_input, LATEST_IMAGE_CONTEXT
 from tablet_live import WIDTH, HEIGHT, notebook_crop, notebook_pixels, png_bytes
 
@@ -48,6 +49,19 @@ class VisualInputTests(unittest.TestCase):
         image, context = notebook_visual_input(frame, blank)
         self.assertEqual(image.tobytes(), notebook_crop(frame, blank).tobytes())
         self.assertEqual(context, LATEST_IMAGE_CONTEXT)
+
+    def test_a_circle_around_older_ink_carries_that_ink_and_asks_about_it(self):
+        blank = Image.new('L', (WIDTH, HEIGHT), 255)
+        base = blank.copy()
+        ImageDraw.Draw(base).rectangle((400, 600, 600, 640), fill=0)  # an older word
+        ImageDraw.Draw(base).rectangle((300, 1200, 900, 1240), fill=0)  # older notes elsewhere
+        frame = base.copy()
+        ImageDraw.Draw(frame).ellipse((360, 570, 640, 670), outline=0, width=5)  # James circles the word
+        image, context = notebook_visual_input(frame, base)
+        self.assertIn('two panels', context)
+        self.assertIn('a circle, an underline or', context)
+        left, top, _, _ = writing_box(frame, base)
+        self.assertLess(image.getpixel((500-left, 620-top)), 100)  # the circled word is in the new-ink crop
 
     def test_controls_are_not_context_or_new_input(self):
         frame = self.now.copy()

@@ -91,6 +91,10 @@ for (const reply of [null, {}, {error:'provider diagnostics'}]) {
   assert.equal(notes.herdFailureNote(reply), 'Reply needs attention');
 }
 assert.equal(notes.herdFailureNote({error:'Notebook model cancelled; reply held, no automatic resend'}),'Request stopped');
+for (const error of ['Rest of the story timed out after 180 s; its start is on the page',
+  'Rest of the story failed: notebook model busy; its start is on the page', "Rest of the story didn't arrive"]) {
+  assert.equal(notes.herdFailureNote({error}), "Rest of the story didn't arrive");
+}
 const labelStart = source.indexOf('function herdStatusLabel(');
 const labelEnd = source.indexOf('\n\t\t\t\tText {',labelStart);
 assert(labelStart >= 0 && labelEnd > labelStart);
@@ -133,7 +137,8 @@ for (const state of ['writing', 'waiting', 'failed']) {
   assert.equal(posts.length, state === 'writing' ? 1 : 0);
   if (posts.length) {
     assert.equal(posts[0].route, '/native-text-failed');
-    assert.equal(JSON.stringify(posts[0].body), '{"page":"doc/page.rm","request":"current"}');
+    // Status only: the page, the request and whether anything of it reached the page.
+    assert.equal(JSON.stringify(posts[0].body), '{"page":"doc/page.rm","request":"current","untouched":true}');
     assert.equal(failed.herdNote, 'Reply needs attention');
   }
 }

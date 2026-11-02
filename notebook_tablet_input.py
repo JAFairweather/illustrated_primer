@@ -10,16 +10,16 @@ import subprocess
 
 import numpy as np
 
+from tablet_live import IMAGE_FIND
+
 W, H = 1404, 1872
 TABLET = os.environ.get('HERD_BOARD_TABLET', 'root@remarkable.lan')
 WX, WY = 20967, 15725  # Wacom ABS_X (screen y, inverted) and ABS_Y (screen x)
-# xochitl's screen image, read from its memory: 32-bit pixels, grey in the second byte, in a mapping of its own
-# (W*H*4 bytes and malloc's 8-byte header, in whole pages). Found by its size: its place moves between restarts
-# (2.6 MB past /dev/fb0 until 2026-11-01, then 4.7 MB).
+# xochitl's screen image, read from its memory: 32-bit pixels, grey in the second byte, after malloc's 8-byte header
+# (tablet_live finds it).
 PAGES = -(-(W*H*4+8)//4096)
-SHOT = (f'P=$(pidof xochitl); O=$(while read r x; do [ $((0x${{r#*-}}-0x${{r%-*}})) -eq {PAGES*4096} ] && '
-        f'echo $((0x${{r%-*}})) && break; done < /proc/$P/maps); '
-        f'[ -n "$O" ] && dd if=/proc/$P/mem bs=4096 skip=$((O/4096)) count={PAGES} 2>/dev/null')
+SHOT = (f'fb_pid=$(pidof xochitl); {IMAGE_FIND}; '
+        f'[ -n "$fb_image" ] && dd if=/proc/$fb_pid/mem bs=4096 skip=$((fb_image/4096)) count={PAGES} 2>/dev/null')
 
 
 def _ssh(command, data=None, timeout=60):

@@ -1,6 +1,7 @@
 """herd-board-primer offline: wrapping, what it narrates, and how it follows a request through the trace."""
 import base64
 import contextlib
+import fcntl
 import importlib.machinery
 import importlib.util
 import io
@@ -99,6 +100,98 @@ class PrimerTests(unittest.TestCase):
         self.assertEqual([x.get('stage') for x in said if 'stage' in x], ['reading', 'thinking', 'drawing', 'done'])
         self.assertEqual([x['say'] for x in said if 'say' in x], ['James, once upon a time a robot.', 'Two.', 'Three.'])
 
+    def test_each_paragraph_is_said_as_its_handwriting_starts_not_on_a_timer(self):
+        self.reply(dict(mode='lesson', steps=[dict(caption='One.'), dict(caption='Two.'), dict(caption='Three.')],
+                        takeaway='So.'))
+        primer.STEP = 0.05  # would say every line within the first claim's wait if the timer still ran
+        heard, began = [], time.time()
+        claim = lambda scene: line('ink_claimed', scene=scene, block_stage='hand' if scene[:5] == 'hand-' else 's1')
+
+        def write(text):
+            with open(self.trace, 'a') as f:
+                f.write(text)
+        write(line('rendered')+line('state', 'writing')+claim('hand-a')+claim('hand-b'))
+        threading.Timer(.4, write, [claim('picture-1')+claim('hand-c')]).start()
+        threading.Timer(.8, write, [claim('picture-2')+line('ink_claimed', 'refused', scene='hand-x')
+                                    + claim('hand-d')]).start()
+        threading.Timer(1.2, write, [line('acknowledged')]).start()
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append((time.time()-began, x))):
+            self.assertTrue(primer.follow(REQUEST, 0))
+        said = [(t, x['say']) for t, x in heard if 'say' in x]
+        self.assertEqual([s for _, s in said], ['James, once upon a time. One.', 'Two.', 'Three.', 'So.'])
+        self.assertLess(said[0][0], .4)
+        self.assertTrue(.4 <= said[1][0] < .8 and .8 <= said[2][0] < 1.2 and said[3][0] >= 1.2, said)
+
+    def test_a_passage_is_said_when_the_block_that_opens_it_is_claimed(self):
+        # Two passages in one run of handwriting, no picture between: run counting would hold the second to the end.
+        self.reply(dict(mode='lesson', steps=[dict(caption='Pip was born in a basket of wool.'),
+                                              dict(caption='Weeks later, Pip got a thorn in her paw.'),
+                                              dict(caption='Years later, Pip had kittens of her own.')],
+                        takeaway='Cats purr to say I am here.'))
+        heard, began = [], time.time()
+        claim = lambda scene, opens=None: line('ink_claimed', scene=scene, block_stage='hand', opens=opens)
+
+        def write(text):
+            with open(self.trace, 'a') as f:
+                f.write(text)
+        write(line('rendered')+line('state', 'writing')+claim('hand-o', 'James, once upon a time...')
+              + claim('hand-a', 'Pip was born in a basket of wool.')+claim('hand-a2'))
+        threading.Timer(.4, write, [claim('picture-1', None)+claim('hand-b', 'Weeks later, Pip got a thorn in her p')]).start()
+        threading.Timer(.8, write, [claim('hand-c', 'Years later, Pip had kittens of her own.')]).start()
+        threading.Timer(1.2, write, [line('acknowledged')]).start()
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append((time.time()-began, x))):
+            self.assertTrue(primer.follow(REQUEST, 0))
+        said = [(t, x['say']) for t, x in heard if 'say' in x]
+        self.assertEqual([s for _, s in said], ['James, once upon a time. Pip was born in a basket of wool.',
+                                                'Weeks later, Pip got a thorn in her paw.',
+                                                'Years later, Pip had kittens of her own.', 'Cats purr to say I am here.'])
+        self.assertLess(said[0][0], .4)
+        self.assertTrue(.4 <= said[1][0] < .8 and .8 <= said[2][0] < 1.2 and said[3][0] >= 1.2, said)
+
+    def test_a_typed_caption_is_said_as_its_drawing_starts(self):
+        # 11:27 on 2026-11-01: only the opening was handwritten; every claim carried "opens": null, and all was said at the end.
+        # The server names a typed caption on its drawing's claim; a drawing under a handwritten caption names nothing.
+        self.reply(dict(mode='lesson', steps=[dict(caption='One.'), dict(caption='Two.')], takeaway='So.'))
+        heard, began = [], time.time()
+        claim = lambda scene, stage, opens=None: line('ink_claimed', scene=scene, block_stage=stage, opens=opens)
+
+        def write(text):
+            with open(self.trace, 'a') as f:
+                f.write(text)
+        write(line('rendered')+line('state', 'writing')+claim('hand-o', 'hand', 'James, once upon a time...'))
+        threading.Timer(.6, write, [claim('lesson-1', 'step-1', 'One.')+claim('lesson-1', 'step-1-2')]).start()
+        threading.Timer(1.6, write, [claim('lesson-2', 'step-2', 'Two.')+claim('lesson-3', 'step-3')]).start()
+        threading.Timer(2.6, write, [line('acknowledged')]).start()
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append((time.time()-began, x))):
+            self.assertTrue(primer.follow(REQUEST, 0, opened='James, once upon a time...'))
+        said = [(t, x['say']) for t, x in heard if 'say' in x]
+        self.assertEqual([s for _, s in said], ['James, once upon a time...', 'One.', 'Two.', 'So.'])
+        self.assertTrue(said[0][0] < .6 and .6 <= said[1][0] < 1.6 and 1.6 <= said[2][0] < 2.6 <= said[3][0], said)
+
+    def test_a_storys_head_then_its_rest_are_one_telling(self):
+        # The head (opening and first caption) is written as its own request; its done names the rest's request.
+        self.reply(dict(mode='lesson', steps=[dict(caption='One.'), dict(caption='Two.')], takeaway='So.'))
+        rest = 'notebook-'+'f'*32
+        claim = lambda scene, opens=None, request=REQUEST: line('ink_claimed', request=request, scene=scene, opens=opens)
+        heard = []
+        Path(self.trace).write_text(line('head', opens='One.')+line('rendered', mode='answer')+line('state', 'writing')
+                                    + claim('hand-o', 'James, once upon a time...')+claim('hand-1', 'One.')
+                                    + line('acknowledged')+line('state', 'written')+line('continued', next=rest)
+                                    + line('acknowledged')  # the head's post, traced after it answered
+                                    + line('state', 'writing', request=rest)+claim('lesson-2', 'Two.', rest)
+                                    + line('acknowledged', request=rest))
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append(x)):
+            self.assertTrue(primer.follow(REQUEST, 0, opened='James, once upon a time...'))
+        self.assertEqual([x['say'] for x in heard if 'say' in x], ['James, once upon a time...', 'One.', 'Two.', 'So.'])
+        self.assertEqual([x['stage'] for x in heard if x.get('stage') == 'done'], ['done'])
+        Path(self.trace).write_text(line('head', opens='One.')+line('acknowledged')+line('continued', next=rest)
+                                    + line('held', 'failed', request=rest,
+                                           reason='Rest of the story timed out after 180 s; its start is on the page'))
+        heard.clear()
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append(x)):
+            self.assertFalse(primer.follow(REQUEST, 0))
+        self.assertEqual(heard[-1], dict(stage='failed', note="I wrote the start of the story, but the rest didn't come. Ask again."))
+
     def test_each_line_carries_the_narrators_voice_and_the_end_comes_with_done(self):
         self.reply(dict(mode='lesson', steps=[dict(caption='One.'), dict(caption='Two.')]))
         self.speech.side_effect = lambda text: ('wav:'+text).encode()
@@ -111,6 +204,66 @@ class PrimerTests(unittest.TestCase):
         self.assertEqual(heard, ['wav:James, once upon a time. One.', 'wav:Two.', 'wav:The end.'])
         self.assertIn('audio', said[-1])
 
+    def test_an_r1_that_lost_its_connection_reattaches_and_hears_the_lines_it_missed(self):
+        # 2026-11-02 12:30: the R1's Wi-Fi gave out after the question's read-back; the tablet got the whole story.
+        live, lock = os.path.join(self.tmp.name, 'live.jsonl'), os.path.join(self.tmp.name, 'primer.lock')
+        with unittest.mock.patch.multiple(primer, LIVE=live, LOCK=lock, RUNS=os.path.join(self.tmp.name, 'runs')), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.addCleanup(setattr, primer, 'live', None)
+            self.addCleanup(setattr, primer, 'run_log', None)
+            primer.start_run('Seven friends go rafting on the Rio Pacuare. How does the trip go?')
+            primer.out(stage='writing')
+            primer.out(say='Seven friends go rafting.')
+            primer.out(show='old picture')
+            primer.out(say='James, once upon a time...')
+            primer.out(show='new picture')
+            primer.out(say='The raft finds the smooth V.')
+            primer.out(stage='done', say='The end.')
+            for start, heard in ((2, ['James, once upon a time...', 'The raft finds the smooth V.', 'new picture',
+                                      'The end.']), (6, ['The end.'])):
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    self.assertEqual(primer.attach(start), 0)
+                self.assertEqual([x.get('say') or x.get('show') for x in map(json.loads, printed.getvalue().splitlines())],
+                                 heard)
+            self.assertTrue(primer.same_question('Seven friends go rafting together on the Rio Pacuare. How does that '
+                                                 'trip go?', primer.told_question()))
+            self.assertFalse(primer.same_question('Why is the sky blue?', primer.told_question()))
+
+    def test_a_reattached_r1_follows_the_story_as_it_goes_on(self):
+        live, lock = os.path.join(self.tmp.name, 'live.jsonl'), os.path.join(self.tmp.name, 'primer.lock')
+        Path(live).write_text(''.join(json.dumps(x)+'\n' for x in ({'question': 'q'}, {'say': 'One.'}, {'show': 'a'},
+                                                                      {'show': 'b'})))
+        held = open(lock, 'w')
+        fcntl.flock(held, fcntl.LOCK_EX)
+
+        def tell():
+            time.sleep(0.5)
+            with open(live, 'a') as f:
+                f.write(json.dumps({'say': 'Two.'})+'\n')
+                f.flush()
+                time.sleep(0.5)
+                f.write(json.dumps({'stage': 'done', 'say': 'The end.'})+'\n')
+            held.close()
+        teller = threading.Thread(target=tell)
+        teller.start()
+        printed = io.StringIO()
+        with unittest.mock.patch.multiple(primer, LIVE=live, LOCK=lock), contextlib.redirect_stdout(printed):
+            self.assertEqual(primer.attach(1), 0)
+        teller.join()
+        self.assertEqual([x.get('say') or x.get('show') for x in map(json.loads, printed.getvalue().splitlines())],
+                         ['b', 'Two.', 'The end.'])
+
+    def test_a_story_that_stopped_without_an_end_tells_the_reattached_r1_so(self):
+        live, lock = os.path.join(self.tmp.name, 'live.jsonl'), os.path.join(self.tmp.name, 'primer.lock')
+        Path(live).write_text(json.dumps({'question': 'q'})+'\n'+json.dumps({'say': 'One.'})+'\n')
+        printed = io.StringIO()
+        with unittest.mock.patch.multiple(primer, LIVE=live, LOCK=lock), contextlib.redirect_stdout(printed):
+            self.assertEqual(primer.attach(0), 1)
+        said = [json.loads(x) for x in printed.getvalue().splitlines()]
+        self.assertEqual(said[0], {'say': 'One.'})
+        self.assertEqual(said[-1]['stage'], 'failed')
+
     def test_the_question_is_read_back_then_a_breath_then_the_opening(self):
         self.speech.side_effect = lambda text, timeout=30: primer.voice.wav(b'\0\0'*primer.voice.RATE)
         printed = io.StringIO()
@@ -118,7 +271,7 @@ class PrimerTests(unittest.TestCase):
                 unittest.mock.patch.object(primer.voice, 'remembered', return_value=b'RIFFopening'):
             primer.read_back('What is a raven?', 'James, once upon a time...')
         said = [json.loads(x) for x in printed.getvalue().splitlines()]
-        self.assertEqual([x['say'] for x in said], ['What is a raven?', 'James, once upon a time...'])
+        self.assertEqual([x['say'] for x in said], ['What is a raven?'], 'the opening waits for its handwriting')
         seconds = (len(base64.b64decode(said[0]['audio']))-44)/2/primer.voice.RATE
         self.assertAlmostEqual(seconds, 1+primer.voice.PAUSE, places=2)
         self.speech.side_effect = OSError('402 Payment Required')  # Piper reads it back; an errand has no opening
@@ -172,7 +325,21 @@ class PrimerTests(unittest.TestCase):
         self.reply(dict(mode='lesson', steps=[dict(caption='... a robot.'), dict(caption='Two.')], takeaway='So.'))
         self.assertEqual(primer.narration(REQUEST, opened=True), ['... a robot.', 'Two.', 'So.'])
 
-    def test_the_tale_is_told_from_its_first_beat_before_the_reply_is_drawn_and_keeps_to_the_pen_after(self):
+    def test_a_page_that_took_a_plain_answer_is_said_as_the_page_says_it_not_as_the_tale(self):
+        # 12:08 on 2026-11-01: the voice told the tale while the page showed Pi Dog's own short answer.
+        page = 'doc/page.rm'
+        tale = dict(steps=[dict(caption='... a mapmaker named Odile.', see='x')], takeaway='Tale takeaway.')
+        Path(self.tmp.name, page.replace('/', '_')+'.json').write_text(json.dumps(dict(tale, t=time.time())))
+        self.reply(dict(mode='answer', text='The page answer.'))
+        Path(self.trace).write_text(line('rendered', mode='answer')+line('state', 'writing')+line('acknowledged'))
+        heard = []
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append(x)):
+            self.assertTrue(primer.follow(REQUEST, 0, path=page, asked=time.time()-5))
+        said = [x['say'] for x in heard if 'say' in x]
+        self.assertIn('The page answer.', said)
+        self.assertFalse(any('Odile' in s or 'Tale takeaway' in s for s in said), said)
+
+    def test_the_tale_waits_for_the_pen_and_the_opening_is_said_as_its_handwriting_starts(self):
         page = 'd'*36+'/'+'e'*36+'.rm'
         asked = time.time()
         tale = dict(steps=[dict(caption='... a robot.', see='a robot'), dict(caption='Two.', see='x'),
@@ -182,21 +349,24 @@ class PrimerTests(unittest.TestCase):
         Path(self.tmp.name, page.replace('/', '_')+'.json').write_text(json.dumps(dict(tale, t=asked+1)))
         self.assertEqual(primer.tale(page, asked), ['James, once upon a time a robot.', 'Two.', 'Three.', 'So.'])
         self.reply(dict(mode='lesson', steps=[dict(caption='Other words.')]))  # the tale, not the reply, is told
-        primer.STEP = 0.3
-        printed = io.StringIO()
+        primer.STEP = 0.05
+        heard, began = [], time.time()
+        claim = lambda scene, opens=None: line('ink_claimed', scene=scene, block_stage='hand',
+                                               **({'opens': opens} if opens else {}))
 
         def write(text):
             with open(self.trace, 'a') as f:
                 f.write(text)
         threading.Timer(.3, write, [line('page_read')+line('submitted')+line('rendered')+line('state', 'writing')]).start()
-        threading.Timer(.7, write, [line('acknowledged')]).start()
-        with contextlib.redirect_stdout(printed):
-            self.assertTrue(primer.follow(REQUEST, 0, page, asked, opened=True))
-        said = [json.loads(x) for x in printed.getvalue().splitlines()]
-        self.assertEqual(said[0], {'say': '... a robot.'}, 'the first beat comes before the page is even read')
-        self.assertEqual([x['say'] for x in said if 'say' in x], ['... a robot.', 'Two.', 'Three.', 'So.'])
-        self.assertLess(said.index({'say': 'Two.'}), said.index({'stage': 'done'}))
-        self.assertGreater(said.index({'say': 'Two.'}), said.index({'stage': 'drawing'}), 'later beats keep to the pen')
+        threading.Timer(.6, write, [claim('hand-o', 'James, once upon a time...')+claim('hand-a', '... a robot.')]).start()
+        threading.Timer(1.6, write, [claim('picture-1')+claim('hand-b', 'Two.')]).start()  # follow() looks twice a second
+        threading.Timer(2.6, write, [line('acknowledged')]).start()
+        with unittest.mock.patch.object(primer, 'out', lambda **x: heard.append((time.time()-began, x))):
+            self.assertTrue(primer.follow(REQUEST, 0, page, asked, opened='James, once upon a time...'))
+        said = [(t, x['say']) for t, x in heard if 'say' in x]
+        self.assertEqual([s for _, s in said], ['James, once upon a time...', '... a robot.', 'Two.', 'Three.', 'So.'])
+        self.assertTrue(.6 <= said[0][0] < 1.6 and .6 <= said[1][0] < 1.6, 'nothing is said before its ink: %s' % said)
+        self.assertTrue(1.6 <= said[2][0] < 2.6 and said[3][0] >= 2.6, said)
 
     def test_the_openings_voice_is_made_once_and_then_kept(self):
         self.speech.side_effect = lambda text: b'RIFF'+text.encode()
@@ -209,13 +379,19 @@ class PrimerTests(unittest.TestCase):
             self.assertEqual(primer.voice.remembered('James, once upon a time...'), b'RIFFJames, once upon a time...')
         self.assertEqual(self.speech.call_count, 1)
 
-    def test_a_failed_request_is_reported_with_its_reason(self):
+    def test_a_failed_request_is_reported_in_words_the_r1_can_say(self):
         Path(self.trace).write_text(line('submitted')+line('held', 'failed', reason='Notebook model invalid_json'))
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
             self.assertFalse(primer.follow(REQUEST, 0))
         self.assertEqual(json.loads(printed.getvalue().splitlines()[-1]),
-                         dict(stage='failed', note='Notebook model invalid_json'))
+                         dict(stage='failed', note="My drawing didn't come out right, so nothing was written. Ask again."))
+
+    def test_each_failure_reason_is_said_plainly(self):
+        for reason, words in [('Notebook page_changed', 'keep your ink safe'), ('Timed out after 309 s', 'too long'),
+                              ('Notebook model busy', 'busy'), ('', 'Something went wrong')]:
+            with self.subTest(reason=reason):
+                self.assertIn(words, primer.plain_words(reason))
 
     def test_only_a_recent_unfinished_request_counts_as_in_flight(self):
         Path(self.trace).write_text(line('press')+line('press', request='notebook-'+'e'*32)

@@ -68,10 +68,22 @@ def speech(text, timeout=30):
                            'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': VOICE}}}}}).encode()
     d = gm._post(MODEL, body, timeout, name='herd-board-voice', held=HELD)
     parts = ((d.get('candidates') or [{}])[0].get('content') or {}).get('parts') or []
-    pcm = b''.join(base64.b64decode(p['inlineData']['data']) for p in parts if 'inlineData' in p)
-    if not pcm or len(pcm)/2/GEMINI_RATE > LEAD+SPOKEN*len(text.split()):
+    pcm, rate = samples(b''.join(base64.b64decode(p['inlineData']['data']) for p in parts if 'inlineData' in p))
+    if not pcm or len(pcm)/2/rate > LEAD+SPOKEN*len(text.split()):
         return None
-    return wav(resample(pcm))
+    return wav(resample(pcm, src=rate))
+
+
+def samples(audio):
+    """The 16-bit samples and their rate in what Gemini sent: raw PCM at GEMINI_RATE, or (since 2026-11-01) a WAV file
+    whose header and trailing C2PA provenance chunk were played as static at the end of every line."""
+    if audio[:4] != b'RIFF':
+        return audio, GEMINI_RATE
+    try:
+        with wave.open(io.BytesIO(audio)) as w:
+            return w.readframes(w.getnframes()), w.getframerate()
+    except (wave.Error, EOFError):
+        return b'', GEMINI_RATE
 
 
 def paused(clip, seconds=PAUSE):

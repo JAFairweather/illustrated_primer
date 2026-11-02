@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 import notebook_image_model as model
+import notebook_raster_ink as ri
 from notebook_raster_ink import raster_plan, budget, linemerge, order, new_ink, vectorize, hatch, solids, dilate, _points
 
 
@@ -117,6 +118,24 @@ class RasterInkTests(unittest.TestCase):
                                  ([frame(1)], []), ([frame(1)]*7, ['x']*7)):
             with self.subTest(n=len(frames)), self.assertRaises(ValueError):
                 raster_plan(frames, captions)
+
+
+    def test_picture_labels_and_bubbles_are_lettered_in_the_configured_label_hand(self):
+        import notebook_lesson
+        from notebook_handwriting import handwriting_paths
+        from notebook_plotter_font import label_paths
+        ink = np.zeros((ri.HEIGHT, ri.WIDTH), bool)
+        ink[300:420, 300:460] = True
+        box = (300, 300, 460, 420)
+        names = ['raven', 'Thomas: "Hello!"']
+        with patch.object(notebook_lesson, 'label_hand', 'letter'):
+            paths, _, placed = ri.place_labels(names, {n: box for n in names}, ink)
+            self.assertEqual(ri._letter('raven'), handwriting_paths('raven', ri.LABEL_SIZE, hand='letter'))
+        self.assertEqual(placed, names)
+        with patch.object(notebook_lesson, 'label_hand', 'plotter'):
+            self.assertEqual(ri._letter('raven'), label_paths('raven', ri.LABEL_SIZE))
+            plotter, _, _ = ri.place_labels(names, {n: box for n in names}, ink)
+        self.assertNotEqual(paths, plotter)
 
 
 class PictureReplyTests(unittest.TestCase):
@@ -335,6 +354,27 @@ class ImageModelTests(unittest.TestCase):
         model.keep('notebook-directed', [base, edit], drawn)
         self.assertEqual(model.kept_picture('notebook-directed'), drawn)
 
+    def test_scene_frames_are_drawn_at_once_from_the_base_and_a_chained_picture_still_reads_back(self):
+        drawn = []
+        def one(text, previous=None, *, cached=False, scene=False, **options):
+            drawn.append((text, previous))
+            if text == 'never drawn':
+                raise model.EmptyImage('empty')
+            return text.encode()
+        with patch.object(model, 'frame', side_effect=one):
+            self.assertEqual(model.frames('a pool', ['a crab', '', 'the moon'], scenes=True),
+                             [b'a pool', b'a crab', b'the moon'])
+            self.assertEqual(sorted(drawn[1:]), [('a crab', b'a pool'), ('the moon', b'a pool')])
+            self.assertEqual(model.frames('a pool', ['a crab', 'never drawn', 'the moon'], scenes=True),
+                             [b'a pool', b'a crab'], 'a frame that comes back empty ends the picture there')
+        def chained(text, previous=None, *, cached=False, scene=False, **options):
+            if previous not in (None, b'a pool' if text == 'a crab' else b'a crab'):
+                raise LookupError('frame not rendered')
+            return text.encode()
+        with patch.object(model, 'frame', side_effect=chained):
+            self.assertEqual(model.frames('a pool', ['a crab', 'the moon'], cached=True, scenes=True),
+                             [b'a pool', b'a crab', b'the moon'], 'drawn one from another before 2026-11-01')
+
     def test_only_the_newest_requests_keep_their_frames(self):
         with patch.object(model, 'KEEP', 2):
             for n, t in (('a', 1), ('b', 2), ('c', 3)):
@@ -374,12 +414,49 @@ class ImageModelTests(unittest.TestCase):
             content = run.message['message']['content']
             self.assertEqual(base64.b64decode(content[0]['source']['data']), b'png')
             self.assertIn('handwriting in the image', content[1]['text'])
+            self.assertIn('a circle, an underline or an arrow', content[1]['text'])  # pen as pointer
             self.assertIn('claude-opus-5-5', run.cmd)
             self.assertIn('once upon a time', run.cmd[run.cmd.index('--system-prompt')+1])
             model.story(b'png', 'What is a raven?', 'Ravens play.')
             self.assertEqual([c['type'] for c in run.message['message']['content']], ['text'])
             self.assertIn('FACTS: Ravens play.', run.message['message']['content'][0]['text'])
+            self.assertNotIn('EARLIER', run.message['message']['content'][0]['text'])
+            model.story(b'png', 'A stick', earlier=tale)  # his answer to the tale's closing question
+            asked = run.message['message']['content'][0]['text']
+            self.assertIn('EARLIER ON THIS PAGE you told James: ... a raven slid down a roof.', asked)
+            self.assertIn('What would you teach one?', asked)
+            self.assertIn('continue the same tale', asked)
+            self.assertNotIn('LEARNED', asked)
+            model.story(b'png', 'A stick', learned={'topics': ['Ravens: they plan ahead.'], 'cast': ['Thomas, the raven']})
+            asked = run.message['message']['content'][0]['text']
+            self.assertIn('WHAT JAMES HAS LEARNED FROM YOU BEFORE: Ravens: they plan ahead.', asked)
+            self.assertIn('CHARACTERS FROM YOUR EARLIER TALES: Thomas, the raven', asked)
             post.assert_not_called()
+
+    def test_a_page_of_notes_comes_back_researched_and_organized(self):
+        section = {'caption': 'Garlic: plant it now, before the ground freezes.', 'see': ''}
+        answers = [{'notes': 'Garden plan\n- when to plant garlic?', 'steps': []},
+                   {'intent': 'a garden', 'takeaway': 'Plant now. Where does the sun fall?', 'cast': [],
+                    'steps': [section]*3}]
+        calls = []
+        def run(cmd, input, **kw):
+            calls.append((cmd, json.loads(input)))
+            return SimpleNamespace(stdout=json.dumps({'type': 'result', 'is_error': False,
+                                                      'result': json.dumps(answers[len(calls)-1])})+'\n', stderr='')
+        with patch.object(model, 'WRITER', 'claude-opus-5-5'), patch.object(model.subprocess, 'run', run):
+            tale = model.story(b'png', None, '')
+        self.assertEqual(tale['kind'], 'notes')
+        self.assertEqual(tale['steps'][0]['caption'], 'Garlic: plant it now, before the ground freezes.')
+        (first, _), (second, message) = calls
+        self.assertEqual(first[first.index('--tools')+1], '', 'reading the page needs no tools')
+        self.assertIn('WebSearch', second[second.index('--allowedTools')+1])
+        self.assertIn('research assistant', second[second.index('--system-prompt')+1])
+        self.assertIn("JAMES'S NOTES:\nGarden plan\n- when to plant garlic?", message['message']['content'][0]['text'])
+        answers[0] = {'steps': []}  # a one-line reminder is a note to keep
+        calls.clear()
+        with patch.object(model, 'WRITER', 'claude-opus-5-5'), patch.object(model.subprocess, 'run', run):
+            self.assertIsNone(model.story(b'png', None, ''))
+        self.assertEqual(len(calls), 1)
 
     def test_frames_edit_the_frame_before_are_cached_and_logged(self):
         sent = []
@@ -496,6 +573,33 @@ class ImageModelTests(unittest.TestCase):
         with open(os.path.join(self.dir, 'calls.log')) as f:
             self.assertIn(model.LOCATOR, f.read())
 
+    def test_a_speech_bubble_is_located_by_its_speaker_lettered_in_a_bubble_and_one_per_frame(self):
+        from notebook_semantic_reply import _picture
+        said = 'Thomas: "Someone might be peeking!"'
+        sent = []
+        def urlopen(req, timeout):
+            sent.append(json.loads(req.data)['contents'][0]['parts'][1]['text'])
+            return self.text(json.dumps([{'label': 'Thomas', 'box_2d': [540, 436, 830, 545]}]))
+        with patch('urllib.request.urlopen', urlopen):
+            boxes = model.locate(frame(2), [said, 'oak'])
+        self.assertIn('["Thomas", "oak"]', sent[0], 'the vision model is asked for the speaker, not the words')
+        self.assertEqual(list(boxes), [said])
+        ink = np.zeros((ri.HEIGHT, ri.WIDTH), bool)
+        ink[260:400, 480:600] = True
+        paths, taken, placed = ri.place_labels([said], {said: (480, 260, 600, 400)}, ink)
+        self.assertEqual(placed, [said])
+        x0, y0, x1, y1 = taken[0]
+        self.assertLess(y1, 260, 'above the speaker, where there is room')
+        self.assertEqual(paths[0][0], paths[0][-1], 'the bubble is one closed line')
+        tip = paths[-1][1]
+        self.assertTrue(y1 < tip[1] < 260, 'the tail points down at the speaker and stops short of it')
+        _, report = raster_plan([frame(2)], ['Thomas spots a crack.'], labels=[[('raven', [573, 293, 781, 449]),
+                                                                             (said, [573, 293, 781, 449])]])
+        self.assertEqual(report[0]['lettered'], 2, 'the bubble is kept though the raven is named too')
+        kept = _picture({'base': 'a raven', 'edits': ['wolves'],
+                         'labels': [[said, 'Mira: "Look!"', 'oak'], ['wolves']]}, 2)
+        self.assertEqual(kept['labels'], [[said, 'oak'], ['wolves']])
+
     def test_an_edit_that_redraws_the_picture_is_asked_for_once_more(self):
         drawn = iter([frame(1), frame(1, 40), frame(2)])
         seeds = []
@@ -518,8 +622,26 @@ class ImageModelTests(unittest.TestCase):
         picture = {'base': 'a lever', 'edits': ['a push arrow']}
         kept = _picture(dict(picture, labels=[['fulcrum', 'load', 'plank', 'robot'], ['push', '', 7]]), 2)
         self.assertEqual(kept['labels'], [['fulcrum', 'load', 'plank'], ['push']])
-        self.assertEqual(_picture(dict(picture, labels=[['fulcrum']]), 2), picture, 'one list per frame, or none')
         self.assertEqual(_picture(dict(picture, labels=[[], []]), 2), picture)
+
+    def test_a_miscounted_label_list_still_labels_the_picture(self):
+        from notebook_semantic_reply import _picture
+        # Parrots, 11-02: six captions, three drawn frames, five label lists; every label was dropped.
+        picture = {'base': 'a parrot on a perch', 'edits': ['', 'a girl waving', '', 'a voice box', ''],
+                   'captions': None}
+        del picture['captions']
+        drawn = _picture(dict(picture, labels=[['parrot'], ['girl', 'Zuzu: "Hello!"'], ['voice box']]), 6)
+        self.assertEqual(drawn['labels'], [['parrot'], [], ['girl', 'Zuzu: "Hello!"'], [], ['voice box'], []],
+                         'one list per drawn frame goes to those frames')
+        short = _picture(dict(picture, labels=[['parrot'], [], ['girl'], [], ['voice box']]), 6)
+        self.assertEqual(short['labels'], [['parrot'], [], ['girl'], [], ['voice box'], []], 'lined up from the first')
+        self.assertEqual(_picture({'base': 'a lever', 'edits': ['a push arrow'], 'labels': [['fulcrum']]}, 2)['labels'],
+                         [['fulcrum'], []])
+
+    def test_a_speech_label_may_quote_with_single_quotes(self):
+        self.assertEqual(ri.speech("Zuzu: 'Hello!'"), ('Zuzu', 'Hello!'))
+        self.assertEqual(ri.speech('Thomas: "Someone is peeking!"'), ('Thomas', 'Someone is peeking!'))
+        self.assertIsNone(ri.speech('raven'))
 
     def test_a_frame_drawn_by_the_fallback_is_drawn_again_once_the_primary_is_back(self):
         hold = os.path.join(self.dir, 'hold-until-image')

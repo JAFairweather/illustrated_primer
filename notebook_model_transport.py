@@ -119,10 +119,55 @@ def mend_early_close(text):
         return text
 
 
+_UNITS = dict(zip('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen '
+                  'sixteen seventeen eighteen nineteen'.split(), range(20)))
+_TENS = dict(zip('twenty thirty forty fifty sixty seventy eighty ninety'.split(), range(20, 100, 10)))
+
+
+def _number_words(phrase):
+    """The integer a phrase like 'sixty', 'twenty-five' or 'one hundred five' names (0..999); else None."""
+    words = re.split(r'[ -]+', phrase.lower().replace(' and ', ' '))
+    total = 0
+    if len(words) > 2 and words[1] == 'hundred' and words[0] in _UNITS and 1 <= _UNITS[words[0]] <= 9:
+        total, words = _UNITS[words[0]]*100, words[2:]
+    elif words[1:] == ['hundred'] and words[0] in _UNITS and 1 <= _UNITS[words[0]] <= 9:
+        return _UNITS[words[0]]*100
+    if len(words) == 1 and words[0] in _UNITS:
+        return total+_UNITS[words[0]]
+    if len(words) == 1 and words[0] in _TENS:
+        return total+_TENS[words[0]]
+    if len(words) == 2 and words[0] in _TENS and words[1] in _UNITS and 1 <= _UNITS[words[1]] <= 9:
+        return total+_TENS[words[0]]+_UNITS[words[1]]
+    return None
+
+
+def mend_number_words(text):
+    """text with bare spelled-out numbers ('"radius": sixty', '[105, thirty]') written as digits, when that alone
+    makes it parse; else text. Words inside strings are never touched; the semantic compiler still judges every
+    value. 2026-11-01: two of five replies were refused for this alone."""
+    try:
+        json.loads(text)
+        return text
+    except (TypeError, ValueError, RecursionError):
+        if not isinstance(text, str):
+            return text
+    def bare(match):
+        number = _number_words(match.group(2))
+        return match.group(1)+str(number) if number is not None else match.group(0)
+    parts = re.split(r'("(?:\\.|[^"\\])*")', text)
+    for k in range(0, len(parts), 2):  # odd parts are JSON strings
+        parts[k] = re.sub(r'([:\[,]\s*)([a-zA-Z]+(?:[ -][a-zA-Z]+)*)(?=\s*[,\]}])', bare, parts[k])
+    mended = ''.join(parts)
+    try:
+        return mended if isinstance(json.loads(mended), dict) else text
+    except (ValueError, RecursionError):
+        return text
+
+
 def validate_model_result(raw, request_id, *, observe_response=None):
     result = _validated_envelope(raw, request_id, 'semantic-v1', observe_response)
     if isinstance(result.get('text'), str):
-        result['text'] = mend_early_close(result['text'])
+        result['text'] = mend_early_close(mend_number_words(result['text']))
     try:
         try:
             parsed = parse_semantic_reply(result.get('text'))

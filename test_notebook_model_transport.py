@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from PIL import Image
-from notebook_model_transport import model_request, validate_model_result, call_notebook_model, ModelTransportError
+from notebook_model_transport import model_request, validate_model_result, call_notebook_model, ModelTransportError, mend_number_words
 from notebook_semantic_examples import examples
 from notebook_semantic_prompt import semantic_reply_instructions
 
@@ -79,7 +79,7 @@ class ModelTransportTests(unittest.TestCase):
         early=text[:-1]+'},"extra":{"a":1}}'  # the lesson closed before its last key, as the model sometimes writes it
         with self.assertRaisesRegex(ModelTransportError,'invalid_response'):  # mended to JSON; the compiler still refuses "extra"
             validate_model_result(json.dumps(envelope(early)).encode(),REQUEST)
-        for bad in [text+'}', text[:-1]+'},{"a":1}', text.replace('"numerator": 1','"numerator": one',1)]:
+        for bad in [text+'}', text[:-1]+'},{"a":1}', text.replace('"numerator": 1','"numerator": uno',1)]:
             with self.assertRaisesRegex(ModelTransportError,'invalid_json') as caught:
                 validate_model_result(json.dumps(envelope(bad)).encode(),REQUEST)
             self.assertIn('not valid JSON',caught.exception.detail)
@@ -153,6 +153,27 @@ process.on('SIGTERM',async()=>{await host.close();process.exit(0);});
                 try:child.wait(timeout=3)
                 except subprocess.TimeoutExpired:child.kill();child.wait(timeout=3)
                 child.stdout.close();child.stderr.close()
+
+
+class NumberWordTests(unittest.TestCase):
+    def test_bare_number_words_become_digits_only_outside_strings(self):
+        text = '{"draw": [{"op": "circle", "center": [105, thirty], "radius": sixty}], "caption": "sixty birds, one hundred five"}'
+        mended = json.loads(mend_number_words(text))
+        self.assertEqual(mended['draw'][0], {'op': 'circle', 'center': [105, 30], 'radius': 60})
+        self.assertEqual(mended['caption'], 'sixty birds, one hundred five')
+
+    def test_compound_number_words(self):
+        for words, value in (('twenty-five', 25), ('one hundred five', 105), ('three hundred', 300),
+                             ('nine hundred ninety-nine', 999), ('zero', 0), ('nineteen', 19)):
+            self.assertEqual(json.loads(mend_number_words('{"x": %s}' % words))['x'], value)
+
+    def test_valid_or_unrepairable_text_is_returned_unchanged(self):
+        for text in ('{"x": 1, "ok": true}', '{"x": banana}', '{"x": sixty', '[sixty]', '{"x": twenty-zero}'):
+            self.assertEqual(mend_number_words(text), text)
+
+    def test_a_reply_with_spelled_numbers_reaches_the_compiler_as_digits(self):
+        text = '{"v":1,"mode":"answer","text":"One clear idea.","n":forty}'
+        self.assertEqual(json.loads(mend_number_words(text))['n'], 40)
 
 
 if __name__=='__main__':unittest.main()

@@ -82,3 +82,37 @@ def hand_plans(text, hand='primer', size=SIZE, place=0):
         compile_storyboard(plan)
         plans.append(plan)
     return plans
+
+
+def _curl(cx, cy, radius, turns, start, sign):
+    """A spiral curling inward from radius at angle start, sign 1 clockwise on the page."""
+    steps = max(8, int(24*turns))
+    return [(cx+radius*(1-.75*k/steps)*math.cos(start+sign*2*math.pi*turns*k/steps),
+             cy+radius*(1-.75*k/steps)*math.sin(start+sign*2*math.pi*turns*k/steps)) for k in range(steps+1)]
+
+
+def end_plan(hand='primer', size=44, place=0):
+    """'The End' centred in the hand with a small scroll under it, as a fairy tale ends (James, 2026-10-30).
+    Raises ValueError when the hand cannot write it."""
+    if hand not in HANDS:
+        raise ValueError('unknown hand')
+    strokes, advance = handwriting_paths('The End', size, hand=hand)
+    left = (WIDTH-advance)/2
+    paths = [[(left+x, TOP+y) for x, y in path] for path in strokes]
+    base = max(y for path in paths for _, y in path)+size*.45
+    # The scroll: a gentle wave a little wider than the words, curling under at each end.
+    x0, x1, amp = left-size*.6, left+advance+size*.6, size*.12
+    wave = [(x0+(x1-x0)*k/40, base+amp*math.sin(math.pi*2*k/40)) for k in range(41)]
+    r = size*.28
+    head = list(reversed(_curl(x0, base+r, r, 1.1, -math.pi/2, -1)))
+    tail = _curl(x1, base+r, r, 1.1, -math.pi/2, 1)
+    paths += [head+wave+tail]
+    bottom = max(y for path in paths for _, y in path)
+    digest = hashlib.sha256(f'end:{hand}:{size}:{place}'.encode()).hexdigest()[:24]
+    plan = dict(kind='native-pen-storyboard-plan', scene='hand-'+digest, width=WIDTH,
+                height=max(200, math.ceil(bottom)+TOP), max_step=STEP,
+                stages=[dict(id='hand', title='Handwriting', text='The End.', paths=_sampled(paths), annotations=[])])
+    if not _fits(paths):
+        raise ValueError('the ending does not fit one handwritten region')
+    compile_storyboard(plan)
+    return plan

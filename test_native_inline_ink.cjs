@@ -39,6 +39,7 @@ const start = source.indexOf('function herdInkView(');
 const end = source.indexOf('\n\t\t\t\tTimer { id: herdInkTimer;', start);
 const playbackStart = source.indexOf('function herdPlaybackProgram(');
 const playbackEnd = source.indexOf('\n\t\t\t\tTimer { id: herdPlaybackTimer;', playbackStart);
+const penHelpers = source.slice(source.indexOf('function herdPenNear('),source.indexOf('function herdFocusOwner('));
 function harness() {
   const errors=[], calls=[], queue=[], pastes=[];
   let destroyed=0, committed=0, claim, ack;
@@ -79,6 +80,7 @@ function harness() {
   });
   vm.runInContext(source.slice(start,end),ctx);
   vm.runInContext(source.slice(playbackStart,playbackEnd),ctx);
+  vm.runInContext(penHelpers,ctx);
   function ticks(n=1){for(let i=0;i<n;i++)ctx.herdInkTick();}
   function begin(){ctx.herdBeginInk(work,block,{x:-468,y:100,width:936,height:200});}
   function lock(){ticks(10);assert.equal(ctx.herdInk.phase,'locking');ctx.root.enabled=false;ctx.sceneView.adjustViewActive=true;ticks(5);}
@@ -109,7 +111,9 @@ for(const change of [x=>x.ctx.herdPage='other',x=>x.ctx.herdContextInk++,x=>x.ct
   assert.equal(h.pastes.length,0,'late claim cannot cross page/input/layout/native-lock change');
   assert.equal(h.errors.length,1);assert.equal(h.ctx.herdPasteBusy,false);
 }
-h=harness();h.begin();h.ctx.sceneView.penClose=true;h.ticks();assert.equal(h.errors.length,1);assert.equal(h.calls.length,0);
+// A pen near the page pauses the ink; nothing is claimed or pasted until it has been away 1.5 s.
+h=harness();h.begin();h.ctx.sceneView.penClose=true;h.ticks(20);assert.deepEqual(h.errors,[]);assert.equal(h.calls.length,0);
+h.ctx.sceneView.penClose=false;h.lock();h.grant();assert.deepEqual(h.errors,[]);assert.equal(h.pastes.length,1,'resumes after the pen leaves');
 h=harness();h.v.status=0;h.begin();h.ticks(251);assert.match(h.errors[0],/timed out/);assert.equal(h.pastes.length,0);
 h=harness();h.ctx.Library.entryForId=()=>null;h.begin();
 assert.equal(h.ctx.herdInk,null);assert.equal(h.calls.length,0);assert.equal(h.queue.length,1);
@@ -240,11 +244,20 @@ assert(h.paintCalls.some(c=>c[0]==='setTransform' && c[5]===0 && c[6]===0));
 assert.equal(h.ctx.herdStrokeCanvas.x,234);assert.equal(h.ctx.herdStrokeCanvas.y,330);
 assert.equal(h.ctx.herdStrokeCanvas.width,900);assert.equal(h.ctx.herdStrokeCanvas.height,500);
 for(const change of [x=>x.ctx.herdPage='other',x=>x.ctx.herdContextInk++,x=>x.ctx.herdContextRevision++,
-  x=>x.surface.handler={},x=>x.ctx.root.inSuspend=true,x=>x.ctx.sceneView.penClose=true,
+  x=>x.surface.handler={},x=>x.ctx.root.inSuspend=true,
   x=>x.ctx.sceneView.viewToScene=p=>({x:p.x-700,y:p.y})]){
   h=playbackHarness();h.begin();h.lock();h.grant();h.frame();change(h);h.advance();
   assert.equal(h.pastes.length,0);assert.equal(h.errors.length,1);assert.equal(h.ctx.herdStrokeCanvas.visible,false);
   assert.equal(h.queue.length,0);assert.equal(h.ctx.herdPasteBusy,false);
+}
+{ // a pen near the page holds the drawing still, then it carries on
+  h=playbackHarness();h.begin();h.lock();h.grant();h.frame();h.advance();h.frame();
+  const at=h.ctx.herdInk.playback.elapsed;h.ctx.sceneView.penClose=true;
+  for(let i=0;i<20;i++){h.advance();h.frame();}
+  assert.deepEqual(h.errors,[]);assert.equal(h.ctx.herdInk.playback.elapsed,at,'no strokes while the pen is near');
+  assert.equal(h.ctx.herdStrokeCanvas.visible,true);h.ctx.sceneView.penClose=false;
+  while(h.ctx.herdInk.playback.elapsed<1535){h.advance();h.frame();}
+  h.advance();assert.equal(h.pastes.length,1);assert.deepEqual(h.errors,[]);
 }
 for(const delay of [-1,10001]){
   h=playbackHarness();h.begin();h.lock();h.grant();h.frame();h.advance(delay);

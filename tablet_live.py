@@ -17,11 +17,32 @@ import numpy as np
 WIDTH, HEIGHT = 1404, 1872
 RESPOND_TOP, RESPOND_HEIGHT, RESPOND_RIGHT = 112, 84, 40
 RESPOND_TAP = (1270, RESPOND_TOP + RESPOND_HEIGHT // 2)
-# xochitl's screen image is a mapping of its own: W*H*4 bytes after malloc's 8-byte header, in whole pages. It is found
-# by that size; its place moved between restarts (2.6 MB into the mapping after /dev/fb0 until 2026-11-01, then 4.7 MB
-# past it in a separate one).
+# xochitl's screen image is malloc'd memory of its own: W*H*4 bytes after malloc's 8-byte header, in whole pages. Its
+# mapping can merge with neighbours: after one restart it stood alone (2026-11-01 08:55), after others it followed a
+# quarter-screen buffer (1404x468x4 bytes and a header, in pages) in one mapping. It is found by its header (a zero,
+# then its size with malloc's own-mapping bit), walking from each mapping's start over any of malloc's own chunks in
+# front of it by their sizes, and at the quarter-screen buffer's end when the walk cannot start.
 PIXEL_OFFSET = 8
 ALLOCATION = -(-(WIDTH * HEIGHT * 4 + PIXEL_OFFSET) // 4096) * 4096
+PLACES = (0, -(-(WIDTH * HEIGHT // 4 * 4 + PIXEL_OFFSET) // 4096) * 4096)
+CHUNKS = 16  # the most chunks walked in one mapping
+# Sets fb_image to the address of the image's header in xochitl ($fb_pid), or to nothing.
+IMAGE_FIND = f'''fb_image=$(while read fb_r fb_p fb_x fb_d fb_i fb_n; do
+  [ "$fb_p" = rw-p ] && [ -z "$fb_n" ] || continue
+  case "$fb_r" in (*[!0-9a-f-]*) continue;; esac
+  fb_s=$((0x${{fb_r%-*}})); fb_e=$((0x${{fb_r#*-}})); fb_k=0; fb_t=0
+  while [ $fb_t -lt {CHUNKS} ] && [ $((fb_s + fb_k + {ALLOCATION})) -le $fb_e ]; do
+    fb_t=$((fb_t + 1)); fb_z=0
+    set -- $(dd if=/proc/$fb_pid/mem bs=8 skip=$(((fb_s + fb_k) / 8)) count=1 2>/dev/null | od -x)
+    [ "$2$3" = 00000000 ] && [ ${{#4}} -eq 4 ] && [ ${{#5}} -eq 4 ] && fb_z=$((0x$5$4))
+    [ $((fb_z & 2)) -ne 0 ] && [ $((fb_z & ~7)) -ge {WIDTH * HEIGHT * 4} ] && [ $((fb_z & ~7)) -le {ALLOCATION} ] &&
+      echo $((fb_s + fb_k)) && break 2
+    if [ $((fb_z & 2)) -ne 0 ] && [ $((fb_z & ~7)) -ge 4088 ] && [ $((fb_k + (fb_z & ~7))) -lt $((fb_e - fb_s)) ]; then
+      fb_k=$((fb_k + ((fb_z & ~7) + 4095) / 4096 * 4096))
+    elif [ $fb_k -eq 0 ]; then fb_k={PLACES[1]}
+    else break; fi
+  done
+done < /proc/$fb_pid/maps; true)'''
 
 
 def framebuffer_region(maps):
@@ -70,9 +91,9 @@ fb_pid=$(pidof xochitl)
 case "$fb_pid" in ""|*[!0-9]*) exit 1;; esac
 fb_first=$(awk '$NF == "/dev/fb0" {{ print; exit }}' /proc/$fb_pid/maps)
 test -n "$fb_first"
-fb_line=$(while read fb_r fb_rest; do case "$fb_r" in *[!0-9a-f-]*) continue;; esac
-  [ $((0x${{fb_r#*-}} - 0x${{fb_r%-*}})) -eq {ALLOCATION} ] && echo "$fb_r $fb_rest" && break; done < /proc/$fb_pid/maps)
-test -n "$fb_line"
+{IMAGE_FIND}
+test -n "$fb_image"
+fb_line=$(printf '%x-%x rw-p 0 00:00 0' $fb_image $((fb_image + {ALLOCATION})))  # the image's own range
 fb_maps=$(printf '%s\\n%s' "$fb_first" "$fb_line")
 fb_range=${{fb_line%% *}}
 fb_start=${{fb_range%-*}}

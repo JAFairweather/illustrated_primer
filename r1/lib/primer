@@ -6,7 +6,12 @@
 # what it is doing now in $XDG_RUNTIME_DIR/r1-primer/stage, and what the tablet is drawing now in
 # $XDG_RUNTIME_DIR/r1-primer/view.png.
 #   primer TEXT     a question; push-to-talk lands here from window 24 (lib/r1-ptt/transcribe)
+# Talking while a story is told (barge-in): the press already silenced the line playing (r1-ptt). "Stop", "pause" or
+# "wait" holds the story's lines ($A/hush, $A/hushed) until "go on" or "continue" says the cut line and the held ones;
+# anything else is asked once the story ends ($A/next), so an answer to its closing question carries the tale on.
 # R1_PRIMER_HOST picks the Mac (default: the host named mac in /etc/r1-herd/hosts).
+# A dropped connection doesn't lose the story (Wi-Fi gave out mid-story, 2026-11-02 12:30): the engine counts the lines
+# it has and reconnects with "herd-board-primer attach COUNT" until the Mac says done or failed.
 D=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}; A=$D/r1-primer; mkdir -p "$A" "$D/r1-herd"
 [ -r /etc/r1-herd/env ] && . /etc/r1-herd/env
 [ -r "$HOME/.config/r1/env" ] && . "$HOME/.config/r1/env"
@@ -14,8 +19,26 @@ log() { jq -cn --arg k "$1" --arg t "$2" '{k: $k, t: $t}' >> "$A/log"; }
 stage() { printf '%s\n' "$1" > "$A/stage"; }
 q=$*
 [ -n "$q" ] || exit 0
+# The story's own lines, said in order: one at a time under the lock, so a resume can't interleave with a new line.
+told_line() { R1_PRIMER=1 r1-say -k info ${2:+-clip "$2"} -- "$1"; }
+replay() {   # the line the press cut off, then the lines held while paused
+	[ -s "$A/last" ] && { IFS=$'\t' read -r t c < "$A/last"; [ -s "$c" ] || c=; told_line "$t" "$c"; }
+	[ -s "$A/hushed" ] && while IFS=$'\t' read -r t c; do [ -s "$c" ] || c=; told_line "$t" "$c"; done < "$A/hushed"
+	rm -f "$A/hushed" "$A/hush"
+}
 if read -r p 2>/dev/null < "$A/busy" && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
-	R1_PRIMER=1 r1-say -k blocked "The Primer is still answering."; exit 1   # not held behind the story it means
+	w=$(printf '%s' "$q" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z' ' ' | xargs)
+	exec 8>>"$A/hush.lock"; flock -w 5 8
+	case $w in
+	stop|pause|wait|hold\ on|hang\ on|hush|quiet|be\ quiet|one\ moment|just\ a\ moment|stop\ please|please\ stop)
+		: > "$A/hush"; stage "Paused: say go on" ;;
+	go\ on|continue|keep\ going|carry\ on|resume|go\ ahead|please\ continue|please\ go\ on|ok\ go\ on|okay\ go\ on)
+		replay; stage "Drawing and telling" ;;
+	*)
+		printf '%s\n' "$q" > "$A/next"
+		R1_PRIMER=1 r1-say -k info "I'll answer that when this story ends."; replay ;;
+	esac
+	exit 0
 fi
 h=${R1_PRIMER_HOST:-$(awk '$1 == "mac" { print $2; exit }' /etc/r1-herd/hosts 2>/dev/null)}
 [ -n "$h" ] || { r1-say -k blocked "No Mac to write with."; exit 1; }
@@ -24,7 +47,7 @@ h=${R1_PRIMER_HOST:-$(awk '$1 == "mac" { print $2; exit }' /etc/r1-herd/hosts 2>
 export R1_PRIMER=1
 release() {
 	exec 9>>"$A/held.lock"; flock -w 5 9
-	rm -f "$A/busy" "$A/stage"; [ -s "$A/held" ] && mv "$A/held" "$A/held.$$"
+	rm -f "$A/busy" "$A/stage" "$A/hush" "$A/hushed" "$A/last"; [ -s "$A/held" ] && mv "$A/held" "$A/held.$$"
 	exec 9>&-
 	[ -s "$A/held.$$" ] || return 0
 	while IFS= read -r m; do
@@ -34,34 +57,61 @@ release() {
 	done < "$A/held.$$"
 	rm -f "$A/held.$$"
 }
-echo $$ > "$A/busy"; trap release EXIT
+ask_next() {   # a question asked during the story, asked now that the held words are said
+	[ -s "$A/next" ] || return 0
+	local q; q=$(cat "$A/next"); rm -f "$A/next"; setsid "$0" "$q" </dev/null >/dev/null 2>&1 &
+}
+echo $$ > "$A/busy"; trap 'release; ask_next' EXIT
+rm -f "$A/hush" "$A/hushed" "$A/last" "$A/next"
 # The Mac sends each line in the narrator's voice when it has it ("audio", a WAV for r1-sayd); else Piper says it.
 rm -f "$A"/clip-*.wav
 clip() { c=$A/clip-$2.wav; jq -er '.audio // empty' <<<"$1" 2>/dev/null | base64 -d > "$c" 2>/dev/null && [ -s "$c" ] || c=; }
 log q "$q"
 rm -f "$A/view.png"
 stage "Looking at the tablet"
-told=0 failed='' n=0 endc=
+told=0 failed='' n=0 endc= got=0 ended=
 # On the Mac, ~/bin's python is the one the notebook server runs with: it has numpy and PIL.
+MAC='PATH=$HOME/bin:/opt/homebrew/bin:/usr/bin:/bin:$HOME/.local/bin;'
+SSH=(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=5
+	-o ServerAliveCountMax=3)
+hear() {   # the Mac's lines, one connection's worth
 while IFS= read -r line; do
+	got=$((got + 1))
+	[ -n "$back" ] && { stage "Drawing and telling"; back=; }
 	k=$(jq -r 'if .say then "say" elif .show then "show" else .stage // "" end' <<<"$line" 2>/dev/null)
 	case $k in
-	say) t=$(jq -r .say <<<"$line"); log s "$t"; told=1; n=$((n + 1)); clip "$line" $n; r1-say -k info ${c:+-clip "$c"} -- "$t" ;;
-	done) clip "$line" end; endc=$c ;;
+	say) t=$(jq -r .say <<<"$line"); log s "$t"; told=1; n=$((n + 1)); clip "$line" $n
+		exec 8>>"$A/hush.lock"; flock -w 5 8
+		if [ -e "$A/hush" ]; then printf '%s\t%s\n' "$t" "$c" >> "$A/hushed"
+		else printf '%s\t%s\n' "$t" "$c" > "$A/last"; r1-say -k info ${c:+-clip "$c"} -- "$t"; fi
+		exec 8>&- ;;
+	done) clip "$line" end; endc=$c; ended=1 ;;
 	show) jq -r .show <<<"$line" | base64 -d > "$A/view.tmp" 2>/dev/null && mv -f "$A/view.tmp" "$A/view.png" ;;
 	writing) stage "Writing in your notebook"; r1-say -tone tick ;;   # the first words said are the story's
 	reading) stage "Reading the page" ;;
 	thinking) stage "Thinking" ;;
 	drawing) stage "Drawing and telling" ;;
-	failed) failed=$(jq -r '.note // "It did not work."' <<<"$line") ;;
+	failed) failed=$(jq -r '.note // "It did not work."' <<<"$line"); ended=1 ;;
 	esac
-done < <(printf '%s\n' "$q" | timeout 700 ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
-	-o ControlMaster=auto -o "ControlPath=$D/r1-herd/ssh-%C" -o ControlPersist=10m -o ServerAliveInterval=20 "$h" \
-	'PATH=$HOME/bin:/opt/homebrew/bin:/usr/bin:/bin:$HOME/.local/bin; read -r q; exec herd-board-primer ask "$q"' 2>/dev/null)
+done
+}
+start=$EPOCHSECONDS
+hear < <(printf '%s\n' "$q" | timeout 700 "${SSH[@]}" -o ControlMaster=auto -o "ControlPath=$D/r1-herd/ssh-%C" \
+	-o ControlPersist=10m "$h" "$MAC"' read -r q; exec herd-board-primer ask "$q"' 2>/dev/null)
+# Cut off mid-story: the tablet goes on writing, so pick the story up where it left off. A fresh connection each time,
+# never the shared one, which can hang on the network that just went away.
+while [ -z "$ended" ] && [ "$got" -gt 0 ] && [ $((EPOCHSECONDS - start)) -lt 700 ]; do
+	stage "Reconnecting to the Mac"; back=1
+	sleep 3
+	hear < <(timeout $((700 - (EPOCHSECONDS - start) + 5)) "${SSH[@]}" -o ControlPath=none "$h" \
+		"$MAC exec herd-board-primer attach $got" 2>/dev/null)
+done
 if [ -n "$failed" ]; then
 	log e "$failed"; r1-say -k blocked -- "$failed"
+elif [ -z "$ended" ] && [ "$got" -gt 0 ]; then
+	log e "Lost the Mac."; r1-say -k blocked "I lost the connection to the Mac. The story is still on the tablet."
 elif [ $told = 0 ]; then
 	log e "The Mac did not answer."; r1-say -k blocked "The Primer didn't answer."
-else
+elif [ ! -e "$A/hush" ]; then
 	r1-say -k finished ${endc:+-clip "$endc"} "The end."
 fi

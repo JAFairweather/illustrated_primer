@@ -12,7 +12,7 @@ function setup(){
   const ctx=vm.createContext({root:{sceneController:c,inSuspend:false},
     herdContextSurface:'surface',herdContextInk:4,
     sceneView:{penClose:false,isLoading:false,strokeHandler:{timeSincePenUp:()=>2000}}});
-  vm.runInContext(['herdImageGeometry','herdImageGeometryReady'].map(definition).join('\n'),ctx);
+  vm.runInContext(['herdPenNear','herdImageGeometry','herdImageGeometryReady'].map(definition).join('\n'),ctx);
   const work={job:{nativeInkUsed:true},blockTextBottom:240};
   work.blockImageGeometry=ctx.herdImageGeometry(work,{width:150,height:80},0,270);
   assert.deepEqual(Array.from(work.blockImageGeometry.expected),[0,30,150,320]);

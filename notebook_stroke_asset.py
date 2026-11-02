@@ -75,7 +75,7 @@ def _validate_story_blocks(inks):
         raise ValueError('native story is incomplete')
 
 
-HAND_REGIONS, HAND_POINTS = 12, 24000  # handwritten words: about 500 characters in the primer hand
+HAND_REGIONS, HAND_POINTS = 20, 36000  # handwritten words: a six-step story, its opening and takeaway in the letter hand
 
 
 def validate_native_ink_budget(blocks):
@@ -100,7 +100,7 @@ def validate_native_ink_budget(blocks):
         if len(equations) > 1 or any('story' in b for b in equations):
             raise ValueError('a story permits one separate final equation')
         _validate_story_blocks([b for b in inks if b.get('role') != 'equation'])
-    elif not 1 <= len(inks)-len(equations) <= 6 or len(equations) > 1:
+    elif (inks or not written) and (not 1 <= len(inks)-len(equations) <= 6 or len(equations) > 1):  # a story's head is handwriting alone
         raise ValueError('use at most six drawing steps and one final equation')
     if any(b.get('role') not in (None,'equation') for b in inks):
         raise ValueError('unknown native ink role')

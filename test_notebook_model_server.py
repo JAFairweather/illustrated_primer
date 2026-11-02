@@ -252,6 +252,38 @@ class ModelServerTests(unittest.TestCase):
         direct.assert_called_once()
         self.assertEqual(json.loads(reply.call_args.args[1])['picture'],directed)
 
+    def test_a_tales_picture_is_drawn_while_pi_dog_composes_and_is_the_lessons(self):
+        s=self.s
+        tale=dict(intent='Tides',takeaway='The Moon pulls.',steps=[dict(caption='... a crab.',see='a pool'),
+            dict(caption='The sea slid.',see=''),dict(caption='The Moon pulled.',see='the moon over the sea')])
+        early={'base':'a pool','edits':['','the moon over the sea'],'labels':[['crab'],[],['moon']]}
+        lesson={'v':1,'mode':'lesson','steps':[{'caption':c['caption']} for c in tale['steps']],
+                'picture':{'base':'pi dog pool','edits':['','pi dog moon']}}
+        with patch.object(s.notebook_image_model,'direct',return_value=early) as direct, \
+             patch.object(s.notebook_image_model,'frames',return_value=[b'1',b'2']) as frames, \
+             patch.object(s,'locate_labels',return_value=2):
+            real=threading.Thread
+            def told(context,png,question,request,path):
+                with patch.object(s.threading,'Thread',real):
+                    s.start_picture(path,tale,request)
+                return context
+            with self.environment() as (_,_,_,_,thread):
+                response,args=self.dispatch(thread)
+                result=dict(self.result(response['request']),text=json.dumps(lesson),parsed={'mode':'lesson','picture':lesson['picture']})
+                config=dict(s.lesson_rollout_config(),picture='image')
+                with patch.object(s,'call_notebook_model',return_value=result), patch.object(s,'with_story',side_effect=told), \
+                     patch.object(s,'lesson_rollout_config',return_value=config), \
+                     patch.object(s.notebook_image_model,'keep') as keep, patch.object(s,'notebook_reply') as reply:
+                    s.notebook_model_answer(*args)
+            self.assertIn('[No new picture',direct.call_args.args[2][1])
+            self.assertIn('the moon over the sea',direct.call_args.args[2][2])
+        frames.assert_called_once()  # Pi Dog's own picture is never drawn
+        self.assertEqual(json.loads(reply.call_args.args[1])['picture']['base'],'a pool')
+        self.assertEqual(keep.call_args.args[1],[b'1',b'2'])
+        self.assertNotIn(PATH,s.early_pictures)
+        s.early_pictures[PATH]={'steps':2,'done':threading.Event(),'picture':early}
+        self.assertIsNone(s.take_early_picture(PATH,lesson),'a lesson of other steps is not that tale\'s')
+
     def test_a_refused_reply_gets_two_retries_told_why(self):
         s=self.s
         for second_ok in (True,False):
@@ -278,6 +310,42 @@ class ModelServerTests(unittest.TestCase):
                 self.assertLessEqual(len(contexts[1].encode()),12000)
                 self.assertEqual(s.answers[PATH],'ready' if second_ok else 'failed')
                 self.assertEqual(retain.call_count,0 if second_ok else 1)
+                send.assert_not_called();reader.assert_not_called()
+
+    def test_a_drawing_refused_twice_gives_way_to_the_tale_and_its_picture(self):
+        s=self.s
+        tale=dict(intent='Tides',takeaway='The Moon pulls the sea.',steps=[dict(caption='... a crab.',see='a pool'),
+            dict(caption='The sea slid.',see=''),dict(caption='The Moon pulled.',see='the moon')])
+        early={'base':'a pool','edits':['','the moon']}
+        for drawn in (True,False):
+            with self.subTest(drawn=drawn),self.environment() as (_,_,send,reader,thread):
+                response,args=self.dispatch(thread)
+                done=threading.Event();done.set()
+                s.early_pictures[PATH]={'steps':3,'done':done,'picture':early if drawn else None,
+                                        'frames':[b'1',b'2'] if drawn else None,'labels':0,'tale':tale}
+                contexts=[]
+                def model(endpoint,request,png,context,**kw):
+                    contexts.append(context)
+                    kw['observe_response'](json.dumps(self.result(response['request'])).encode())
+                    error=ModelTransportError('invalid_response')
+                    error.detail='SemanticError: circle outside drawing region'
+                    raise error
+                config=dict(s.lesson_rollout_config(),picture='image')
+                with patch.object(s,'call_notebook_model',side_effect=model), \
+                     patch.object(s,'lesson_rollout_config',return_value=config), \
+                     patch.object(s,'retain_rejected_reply'), patch.object(s,'direct_picture',return_value=None), \
+                     patch.object(s,'with_story',side_effect=lambda context,*_:context), \
+                     patch.object(s.notebook_image_model,'keep'), patch.object(s,'notebook_reply') as reply:
+                    s.notebook_model_answer(*args)
+                self.assertEqual(len(contexts),2 if drawn else 3)
+                self.assertNotIn(PATH,s.early_pictures)
+                if drawn:
+                    lesson=json.loads(reply.call_args.args[1])
+                    self.assertEqual([x['caption'] for x in lesson['steps']],[x['caption'] for x in tale['steps']])
+                    self.assertEqual(lesson['takeaway'],tale['takeaway'])
+                    self.assertEqual(lesson['picture'],early)
+                else:
+                    reply.assert_not_called();self.assertEqual(s.answers[PATH],'failed')
                 send.assert_not_called();reader.assert_not_called()
 
     def prestarted(self, result=None, error=None, observed=None, age=0):
@@ -318,6 +386,39 @@ class ModelServerTests(unittest.TestCase):
             self.prestarted(self.result('notebook-'+'a'*32),age=s.PRESTART_KEEP+1)
             response,args=self.dispatch(thread)
             self.assertIsNone(args[-1])
+
+    def test_a_plain_answer_to_a_tale_already_written_is_asked_again_and_the_last_one_stands(self):
+        # 12:08 on 2026-11-01: Pi Dog answered plainly beside the tale, and the page and the Primer's voice differed.
+        s=self.s
+        told='context'+s.BEATS_NOTE%('[]','""')
+        plain={'parsed':{'mode':'answer'}}
+        with self.assertRaises(ModelTransportError) as raised:
+            s.told_as_written(plain,told,1)
+        self.assertEqual(raised.exception.code,'invalid_response')
+        self.assertIn('lesson mode',raised.exception.detail)
+        s.told_as_written(plain,told,3)
+        s.told_as_written(plain,'context',1)
+        s.told_as_written({'parsed':{'mode':'lesson'}},told,1)
+
+    def test_a_busy_or_dropped_desk_is_asked_again_by_itself_while_the_page_is_unchanged(self):
+        s=self.s
+        with self.environment() as (_,_,_,_,thread),patch.object(s.time,'sleep') as slept:
+            self.prestarted(error=ModelTransportError('busy'))
+            response,args=self.dispatch(thread)
+            failures=[ModelTransportError('busy'),ModelTransportError('unavailable')]
+            def model(*_,**kw):
+                if failures:raise failures.pop(0)
+                return self.result(response['request'])
+            with patch.object(s,'call_notebook_model',side_effect=model) as called:
+                s.notebook_model_answer(*args)
+            self.assertEqual(called.call_count,3);self.assertEqual(slept.call_count,3)
+            self.assertEqual(s.answers[PATH],'ready')
+        with self.environment() as (_,_,_,_,thread),patch.object(s.time,'sleep'):
+            response,args=self.dispatch(thread)
+            with patch.object(s,'call_notebook_model',side_effect=ModelTransportError('busy')) as called:
+                s.notebook_model_answer(*args)
+            self.assertEqual(called.call_count,11)  # ten more tries, then it says so on the page
+            self.assertEqual(s.answers[PATH],'failed')
 
     def test_a_lesson_is_told_to_draw_what_its_answer_turns_on_within_the_context_bound(self):
         s=self.s
@@ -385,6 +486,186 @@ class ModelServerTests(unittest.TestCase):
             self.assertIn('A new result.',context)
             self.assertIn(opening,context)
             self.assertNotIn('already written',context)
+
+    def test_an_answer_under_a_told_tale_continues_it(self):
+        s=self.s
+        tale=dict(intent='Levers',takeaway='A lever trades distance for force. Where would you put the rock?',
+            steps=[dict(caption='... a mouse wanted an apple.',see='a log')]*4)
+        tales=tempfile.mkdtemp();self.addCleanup(shutil.rmtree,tales)
+        learned=patch.object(s,'LEARNED',os.path.join(tales,'learned.json'));learned.start();self.addCleanup(learned.stop)
+        def ask(request,key='earlier'):
+            with patch.object(s,'lesson_rollout_config',return_value=dict(story=True)), patch.object(s,'TALES',tales), \
+                 patch.object(s.notebook_image_model,'facts',return_value=''), \
+                 patch.object(s.notebook_image_model,'story',return_value=tale) as wrote, patch.object(s,'start_picture'):
+                s.with_story('CTX',b'png','Under the middle',request,'page')
+            return wrote.call_args.kwargs[key]
+        self.assertIsNone(ask('r1'))
+        with patch.object(s,'TALES',tales):
+            s.tale_told('page','r0')  # another request's reply: not this tale
+        self.assertIsNone(ask('r2'))  # r1's reply was never acknowledged: James did not see it
+        self.assertIsNone(s.learned_so_far())  # nor has he learned it
+        with patch.object(s,'TALES',tales):
+            s.tale_told('page','r2')
+        earlier=ask('r3')
+        self.assertEqual((earlier['request'],earlier['takeaway']),('r2',tale['takeaway']))
+        self.assertIsNone(ask('r4'))  # r3 replaced it and is not yet written
+        self.assertEqual(ask('r5','learned'),{'topics':['Levers: A lever trades distance for force.'],'cast':[]})
+        with patch.object(s,'TALES',tales):
+            s.tale_told('page','r5')
+            saved=json.loads(Path(tales,'page.json').read_text())
+            Path(tales,'page.json').write_text(json.dumps(dict(saved,t=saved['t']-s.TOLD_KEEP-1)))
+            self.assertIsNone(s.told_tale('page'))  # too old to be what he is answering
+            Path(tales,'page.json').write_text(json.dumps(dict(saved,takeaway='A lever trades force. Draw the rock.')))
+            self.assertEqual(s.told_tale('page')['request'],'r5')  # a closing pen task is answered too
+            s.tale_told('other','r5')  # a page with no tale
+            self.assertIsNone(s.told_tale('other'))
+
+    def test_what_james_has_learned_keeps_the_last_lessons_and_characters_met(self):
+        s=self.s
+        tmp=tempfile.mkdtemp();self.addCleanup(shutil.rmtree,tmp)
+        with patch.object(s,'LEARNED',os.path.join(tmp,'learned.json')):
+            self.assertIsNone(s.learned_so_far())
+            for k in range(15):
+                s.remember_tale(dict(request=f'r{k}',intent=f'Topic {k}',takeaway=f'Fact {k}. What next?',
+                                     cast=[f'Pip, the chloroplast'] if k%2 else [f'Hero {k}, the raven']))
+            s.remember_tale(dict(request='r14',intent='Topic 14',takeaway='Fact 14!',cast=[]))  # the same tale again
+            got=s.learned_so_far()
+        self.assertEqual(got['topics'][0],'Topic 3: Fact 3.')
+        self.assertEqual(got['topics'][-1],'Topic 14: Fact 14!')
+        self.assertEqual(len(got['topics']),12)
+        self.assertEqual(got['cast'][:3],['Pip, the chloroplast','Hero 12, the raven','Hero 10, the raven'])
+        self.assertEqual(len(got['cast']),8)
+
+    def test_enriched_notes_are_neither_a_lesson_learned_nor_a_tale_to_continue(self):
+        s=self.s
+        tmp=tempfile.mkdtemp();self.addCleanup(shutil.rmtree,tmp)
+        notes=dict(kind='notes',intent='a garden',takeaway='Plant now. Where is the sun?',cast=[],
+                   steps=[dict(caption='Garlic: now.',see='')]*3)
+        with patch.object(s,'TALES',os.path.join(tmp,'tales')),patch.object(s,'LEARNED',os.path.join(tmp,'learned.json')):
+            self.assertIsNone(s.saved_tale('nb/p'))
+            s.save_tale('nb/p',notes,'r1')
+            self.assertEqual((s.saved_tale('nb/p')['kind'],s.saved_tale('nb/p')['request']),('notes','r1'))
+            s.tale_told('nb/p','r1')
+            self.assertTrue(s.saved_tale('nb/p')['told'])
+            self.assertIsNone(s.learned_so_far())
+            self.assertIsNone(s.told_tale('nb/p'))
+
+    TALE=dict(intent='Tides',takeaway='The Moon pulls.',steps=[dict(caption='... a crab.',see='a pool'),
+        dict(caption='The sea slid.',see=''),dict(caption='The Moon pulled.',see='')])
+
+    def streaming(self, **more):
+        self.addCleanup(self.s.streams.clear)  # a delivered rest's stream stays until its own write is done
+        return {**self.s.lesson_rollout_config(),'stream':True,'reader':'James','reply_hand':'primer',**more}
+
+    def test_a_storys_head_is_held_when_its_tale_lands_and_its_rest_follows_on_the_page(self):
+        s=self.s
+        line=lambda x:[{'op':'polyline','points':[[x,200],[x+80,260]]}]
+        lesson={'v':1,'mode':'lesson','intent':'Tides.','scene':{'family':'drawing'},'claims':[],'takeaway':'The Moon pulls.',
+                'steps':[{'caption':c['caption'],'draw':line(100+100*i)} for i,c in enumerate(self.TALE['steps'])]}
+        held={}
+        def told(context,png,question,request,path,head=None):
+            head(self.TALE)  # the tale is written: its head is held before Pi Dog is asked
+            held.update(text=s.ready.get(path),state=s.answer_status(path))
+            return context
+        with self.environment() as (_,_,_,_,thread):
+            response,args=self.dispatch(thread)
+            job=args[0]
+            result=dict(self.result(response['request']),text=json.dumps(lesson),parsed={'mode':'lesson'})
+            with patch.object(s,'lesson_rollout_config',return_value=self.streaming()), \
+                 patch.object(s,'with_story',side_effect=told), patch.object(s,'call_notebook_model',return_value=result):
+                s.notebook_model_answer(*args)
+                self.assertEqual(json.loads(held['text'])['text'],'James, once upon a time...\n... a crab.')
+                self.assertEqual((held['state']['state'],held['state']['request']),('ready',job[4]))
+                stream=s.streams[PATH]
+                self.assertEqual(json.loads(stream['rest'])['steps'][0]['caption'],'... a crab.')
+                self.assertEqual(json.loads(s.ready[PATH])['mode'],'answer','the whole reply never replaces its head')
+                with s.pending_lock:
+                    ack=s.continue_stream(PATH,job,stream)  # the head's /native-text-done
+            follow=s.pend('')[PATH]
+            self.assertEqual(ack,{'state':'written','page':PATH,'next':follow[4]})
+            self.assertNotEqual(follow[4],job[4])
+            self.assertEqual((follow[0],follow[6],s.delivery_options(follow)),(job[0],True,s.delivery_options(job)))
+            self.assertEqual(s.answer_status(PATH)['request'],follow[4])
+            self.assertEqual(s.answer_status(PATH)['state'],'ready')
+            self.assertEqual(s.ready[PATH],stream['rest'])
+
+    def test_a_tale_written_before_the_press_gets_its_head_as_the_press_takes_it(self):
+        s=self.s
+        with self.environment() as (_,_,_,_,thread):
+            entry=self.prestarted(self.result('notebook-'+'a'*32))
+            entry['done'].clear()
+            entry['tale']=self.TALE
+            _,args=self.dispatch(thread)
+            job=args[0]
+            REAL_THREAD(target=lambda:(time.sleep(.2),entry['done'].set())).start()
+            with patch.object(s,'lesson_rollout_config',return_value=self.streaming()), \
+                 patch.object(s,'tale_lesson',return_value=None), patch.object(s,'call_notebook_model') as model:
+                s.notebook_model_answer(*args)
+                model.assert_not_called()
+                stream=s.streams[PATH]
+                self.assertEqual(stream['request'],job[4])
+                self.assertEqual(json.loads(s.ready[PATH])['text'],'James, once upon a time...\n... a crab.')
+                with s.pending_lock:
+                    s.continue_stream(PATH,job,stream)
+            self.assertTrue(json.loads(s.ready[PATH])['text'].startswith('The sea slid.'))
+
+    def test_no_head_with_stream_off_for_notes_or_once_the_whole_reply_is_held(self):
+        s=self.s
+        with self.environment() as (_,_,_,_,thread):
+            _,args=self.dispatch(thread)
+            job=args[0]
+            off=dict(self.streaming(),stream=False)
+            for config,tale in ((off,self.TALE),(self.streaming(),dict(self.TALE,kind='notes')),
+                                (self.streaming(reader=None),self.TALE),(self.streaming(),dict(self.TALE,steps=[]))):
+                with patch.object(s,'lesson_rollout_config',return_value=config):
+                    s.stream_head(job,tale)
+                self.assertNotIn(PATH,s.ready)
+                self.assertNotIn(PATH,s.streams)
+                self.assertEqual(s.answer_status(PATH)['state'],'waiting')
+            s.notebook_reply(job[4],TEXT)  # the whole reply won the race
+            with patch.object(s,'lesson_rollout_config',return_value=self.streaming()):
+                s.stream_head(job,self.TALE)
+            self.assertNotIn(PATH,s.streams)
+            self.assertEqual(s.ready[PATH],TEXT)
+
+    def test_a_rest_that_fails_or_never_comes_ends_its_request_failed(self):
+        s=self.s
+        for how in ('failed','timeout','plain'):
+            with self.subTest(how=how),self.environment() as (_,_,_,_,thread):
+                response,args=self.dispatch(thread)
+                job=args[0]
+                with patch.object(s,'lesson_rollout_config',return_value=self.streaming()):
+                    s.stream_head(job,self.TALE)
+                    stream=s.streams[PATH]
+                    if how=='failed':
+                        with patch.object(s,'call_notebook_model',side_effect=ModelTransportError('deadline')), \
+                             patch.object(s,'with_story',side_effect=lambda c,*a,**k:c):
+                            s.notebook_model_answer(*args)
+                    elif how=='plain':  # Pi Dog answered plainly under the head: the rest is the tale's, typed
+                        result=dict(self.result(response['request']),parsed={'mode':'answer'})
+                        with patch.object(s,'call_notebook_model',return_value=result), \
+                             patch.object(s,'with_story',side_effect=lambda c,*a,**k:c), \
+                             patch.object(s,'tale_lesson',return_value=None):
+                            s.notebook_model_answer(*args)
+                    with s.pending_lock:
+                        ack=s.continue_stream(PATH,job,stream)
+                    if how=='timeout':
+                        self.assertEqual(s.answer_status(PATH)['state'],'waiting')
+                        wait=thread.call_args.kwargs['target']
+                        with patch.object(s,'STREAM_WAIT',0):
+                            wait()
+                status=s.answer_status(PATH)
+                self.assertEqual(status['request'],ack['next'])
+                if how=='plain':
+                    self.assertEqual(status['state'],'ready')
+                    rest=json.loads(s.ready[PATH])['text']
+                    self.assertEqual(rest,'The sea slid.\nThe Moon pulled.\nThe Moon pulls.\nThe End.')
+                    continue
+                self.assertEqual(status['state'],'failed')
+                self.assertTrue(status['error'].startswith('Rest of the story '),status['error'])
+                self.assertIn('its start is on the page',status['error'])
+                self.assertNotIn(PATH,s.streams)
+                self.assertNotIn(PATH,s.ready)
 
     def test_a_buzz_message_waits_on_its_page_and_goes_to_pi_dog_only_on_james_yes(self):
         s=self.s

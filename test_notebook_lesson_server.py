@@ -245,6 +245,25 @@ class LessonServerTest(unittest.TestCase):
         self.s.native_text(PATH, ink_supported=True)
         return self.s.native_text(PATH, ink_supported=True, imported={'request':REQUEST,'doc':PAGE})
 
+    def test_turning_the_page_after_every_stage_committed_ends_as_left(self):
+        s = self.s
+        with self.server_job(EXAMPLES['integral']()) as _:
+            self.finish_native()
+            self.assertIn(PATH, s.ready)
+            with patch.object(s.native_ink_runs, 'committed', return_value=False):
+                with self.assertRaisesRegex(ValueError, 'had not finished'):
+                    s.native_text_left(PATH, REQUEST)
+            with self.assertRaisesRegex(ValueError, 'no reply is being written'):
+                s.native_text_left(PATH, 'notebook-'+'e'*32)
+            self.assertIn(PATH, s.pend(''))
+            with patch.object(s.native_ink_runs, 'committed', return_value=True):
+                self.assertEqual(s.native_text_left(PATH, REQUEST), {'state': 'left', 'page': PATH})
+            self.assertEqual(s.answers[PATH], 'left')
+            self.assertNotIn(PATH, s.pend(''))
+            self.assertNotIn(PATH, s.ready)
+            with self.assertRaisesRegex(ValueError, 'no reply is being written'):
+                s.native_text_left(PATH, REQUEST)
+
     def test_native_response_contains_interleaved_stages_and_registered_equation(self):
         s = self.s
         with self.server_job(EXAMPLES['integral']()) as (provision,registered,remote):
@@ -504,6 +523,29 @@ class LessonServerTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'superseded'):
                 s.native_text_failed(PATH, REQUEST)
             self.assertEqual(s.answers[PATH], 'waiting')
+
+    def test_a_stop_before_anything_was_written_lets_the_tablet_ask_again_but_never_replays(self):
+        s = self.s
+        with self.server_job(EXAMPLES['integral']()):
+            self.finish_native()
+            attempt = Path(s.live_baseline(PATH)+'.native-attempt')
+            before = attempt.read_bytes()
+            stage = Path(s.native_ink_runs.directory)/(REQUEST+'-'+'0'*64+'.claim.json')
+            stage.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            stage.write_text('{}')
+            result = s.native_text_failed(PATH, REQUEST, untouched=True)
+            self.assertNotIn('untouched', result, 'a claimed drawing stage may be on the page')
+            stage.unlink()
+            result = s.native_text_failed(PATH, REQUEST, untouched=True)
+            self.assertEqual(result, dict(state='failed', request=REQUEST, untouched=True))
+            self.assertNotIn('untouched', s.native_text_failed(PATH, REQUEST), 'only the tablet knows nothing was written')
+            self.assertEqual(attempt.read_bytes(), before)
+            self.assertIsNone(s.answer_status(PATH)['retry_token'])
+            with self.assertRaisesRegex(ValueError, 'already attempted'):
+                s.native_text(PATH, ink_supported=True)
+            # The automatic re-ask is an explicit new question superseding this failed one (model_request_replaceable).
+            self.assertEqual(s.answers[PATH], 'failed')
+            self.assertTrue(s.matching_native_attempt(s.notebook_jobs[REQUEST]))
 
     def test_preparation_failure_consumes_only_current_retry_hint_and_preserves_answer(self):
         s = self.s

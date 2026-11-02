@@ -24,7 +24,9 @@ from notebook_ink_preservation import (layout_request, preservation_baseline, co
 # A validated lesson can carry 12,000 playback points across six stages. The
 # old metadata-only 64 KiB read cap rejected valid plans after registration.
 # Keep claims/ACKs small; only plans use this matching read/write byte budget.
-MAX_PLAN_BYTES = 1_048_576
+# A 19-page handwritten lesson is ~1 MB (each hand block ~90 KB): James's 2026-11-01 12:54 reply went over 1 MiB
+# and was held. The tablet still bounds each block on its own.
+MAX_PLAN_BYTES = 4_194_304
 
 
 def capture_layout(raw):
@@ -125,6 +127,22 @@ class InkRuns:
                 with os.scandir(directory) as entries:
                     if any(entry.name.startswith((request+'.', request+'-')) for entry in entries):
                         raise ValueError('native drawing journal already prepared')
+            finally:
+                os.close(directory)
+
+    def stage_started(self, request):
+        """Has any drawing stage of this reply been claimed (and so possibly pasted)? Unreadable means yes."""
+        _request(request)
+        with self.lock:
+            try:
+                directory = self._directory()
+            except (OSError, ValueError):
+                return True
+            try:
+                with os.scandir(directory) as entries:
+                    return any(entry.name.startswith(request+'-') for entry in entries)
+            except OSError:
+                return True
             finally:
                 os.close(directory)
 
@@ -305,6 +323,17 @@ class InkRuns:
             self._write_once(request+'.plan.json', record)
         return {'registered': len(selected)}
 
+    def committed(self, request):
+        """Has every drawing stage of this reply committed on the tablet? Not proof that the page saved it."""
+        with self.lock:
+            plan = self._plan(request)
+            for block in plan['blocks']:
+                try:
+                    self._read(self._name(request, block['scene'], block['stage'], '.done.json'))
+                except FileNotFoundError:
+                    return False
+            return True
+
     def _plan(self, request):
         record = self._read(_request(request)+'.plan.json', MAX_PLAN_BYTES)
         if record.get('request') != request:
@@ -326,13 +355,15 @@ class InkRuns:
         return _request(request)+'-'+hashlib.sha256((str(scene)+'/'+str(stage)).encode()).hexdigest()+suffix
 
     def _identity(self, plan, query, context):
-        if (not context.get('fresh') or not context.get('active') or
-                any(context.get(k) != plan[k] for k in ('doc', 'page', 'surface')) or
-                query.get('page') != plan['path'] or query.get('surface') != plan['surface'] or
-                context.get('ink_revision') != plan['ink_revision'] or
-                query.get('ink_revision') != plan['ink_revision'] or
-                context.get('content_revision') != query.get('revision')):
-            raise ValueError('native ink page, input or layout revision changed')
+        changed = ([k for k in ('fresh', 'active') if not context.get(k)] +
+                   [k for k in ('doc', 'page', 'surface') if context.get(k) != plan[k]] +
+                   ['query page'] * (query.get('page') != plan['path']) +
+                   ['query surface'] * (query.get('surface') != plan['surface']) +
+                   ['ink_revision'] * (context.get('ink_revision') != plan['ink_revision']) +
+                   ['query ink_revision'] * (query.get('ink_revision') != plan['ink_revision']) +
+                   ['content_revision'] * (context.get('content_revision') != query.get('revision')))
+        if changed:  # the names say which check failed, so a refusal is explainable from the log
+            raise ValueError('native ink page, input or layout revision changed: '+', '.join(changed))
 
     def claim(self, query, snapshot, preflight):
         fields = {'request', 'page', 'scene', 'stage', 'surface', 'revision', 'ink_revision', 'origin', 'ui_locked'}

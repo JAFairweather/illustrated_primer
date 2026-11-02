@@ -19,6 +19,10 @@ ILLUSTRATION_CONTEXT = (
     'dictionary definition. Asked what a word means, tell a tiny story in which a character '
     'meets that word in action, and draw the scene. A single word or short phrase written '
     'alone is a request to teach it this way, not something to clarify. '
+    # Pen as pointer (James, 2026-11-01): a circle, underline or arrow on the page asks about what it marks.
+    'If the latest ink is a mark on something already on the page (a circle, an underline or '
+    'an arrow), with or without a question mark, it asks what that marked thing is or how it '
+    'works: teach that thing. '
     'By default, answer with a short lesson: '
     'a few steps that tell the story, each with a clear drawing that builds on the last, '
     'ending in a takeaway. Answer with text alone only to ask a clarification, '

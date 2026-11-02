@@ -26,6 +26,16 @@ class EquationInkTests(unittest.TestCase):
         self.assertNotIn('<text',svg)
         self.assertEqual(svg.count('<polyline'),7)
 
+    def test_greek_letters_are_written_by_the_pen_and_drawn_in_the_typed_equation(self):
+        for source in (r'\lambda = c/f', r'A = \pi r^2', 'α + β = γ', r'\frac{\Delta\theta}{\Delta t} = \omega'):
+            asset=playback_assets(equation_plan(source))[0]
+            validate_playback(asset,asset['data'])
+            image=render_equation(source)
+            self.assertLess(image.getextrema()[0],128)
+        self.assertNotEqual(render_equation(r'\alpha').tobytes(),render_equation(r'\beta').tobytes())
+        with self.assertRaisesRegex(ValueError,'unsupported equation command'):
+            equation_plan(r'\aleph')
+
     def test_fraction_layout_does_not_flatten_or_drop_grouping(self):
         n,d=glyph('2',30),glyph('3',30)
         f=fraction(n,d,36)
@@ -48,7 +58,7 @@ class EquationInkTests(unittest.TestCase):
 
     def test_fail_closed_before_any_asset_or_device_io(self):
         for source in ('',r'\input{/tmp/a}',r'\frac{1}',r'x^2^3',r'\unknown',
-                       'x'*401,'x'*40,'α','@',r'\frac{'*18+'1'+'}{2}'*18):
+                       'x'*401,'x'*40,'ℵ','@',r'\frac{'*18+'1'+'}{2}'*18):
             with self.subTest(source=source):
                 with self.assertRaises(ValueError):equation_plan(source)
 

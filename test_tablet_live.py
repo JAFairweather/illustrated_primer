@@ -1,7 +1,11 @@
 import unittest
 import gzip
+import os
+import struct
+import subprocess
+import tempfile
 from PIL import Image, ImageDraw
-from tablet_live import WIDTH, HEIGHT, PIXEL_OFFSET, ALLOCATION, framebuffer_region, writing_box, aligned_writing_box, exposed_writing_box, notebook_crop, notebook_pixels, pen_point, capture, capture_region, decode_capture, RESPOND_TAP, settled_frame
+from tablet_live import WIDTH, HEIGHT, PIXEL_OFFSET, ALLOCATION, PLACES, IMAGE_FIND, framebuffer_region, writing_box, aligned_writing_box, exposed_writing_box, notebook_crop, notebook_pixels, pen_point, capture, capture_region, decode_capture, RESPOND_TAP, settled_frame
 
 
 class TabletLiveTest(unittest.TestCase):
@@ -137,6 +141,38 @@ class TabletLiveTest(unittest.TestCase):
             framebuffer_region(maps.replace(f"{start+ALLOCATION:x}", f"{start+ALLOCATION+4096:x}"))
         with self.assertRaises(ValueError):
             framebuffer_region(maps.replace("rw-p", "r--p"))
+
+    def test_the_screen_image_is_found_by_its_header_alone_after_other_chunks_or_a_quarter_screen_buffer(self):
+        def found(mappings, headers):
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, 'maps'), 'w') as f:
+                    f.write(''.join(f'{a:x}-{b:x} {perms} 0 00:00 0{name}\n' for a, b, perms, name in mappings))
+                with open(os.path.join(d, 'mem'), 'wb') as f:
+                    for address, word in headers:
+                        f.seek(address)
+                        f.write(struct.pack('<II', 0, word))
+                    f.truncate(max(b for _, b, _, _ in mappings))
+                script = IMAGE_FIND.replace('/proc/$fb_pid', d)+'\necho "$fb_image"'
+                return subprocess.run(['/bin/sh', '-c', script], capture_output=True, text=True).stdout.strip()
+        size = ALLOCATION-8 | 2  # as xochitl's malloc wrote it on 2026-11-01
+        alone, merged = 0x400000, 0x2000000
+        self.assertEqual(found([(alone, alone+ALLOCATION, 'rw-p', '')], [(alone, size)]), str(alone))
+        self.assertEqual(found([(merged, merged+PLACES[1]+ALLOCATION+8192, 'rw-p', '')], [(merged+PLACES[1], size)]),
+                         str(merged+PLACES[1]))
+        # behind any of malloc's own chunks, walked over by their sizes (written either way malloc counts them)
+        small, quarter = 8192, PLACES[1]
+        chunks = [(merged, small-8 | 2), (merged+small, quarter | 2), (merged+small+quarter, size)]
+        self.assertEqual(found([(merged, merged+small+quarter+ALLOCATION, 'rw-p', '')], chunks),
+                         str(merged+small+quarter))
+        # a header naming more than its mapping holds is not walked past
+        self.assertEqual(found([(alone, alone+ALLOCATION+8192, 'rw-p', '')], [(alone, 0x7fff0000 | 2)]), '')
+        # no header, a header without the own-mapping bit, a file's mapping or a read-only one: none of them
+        self.assertEqual(found([(alone, alone+ALLOCATION, 'rw-p', '')], []), '')
+        self.assertEqual(found([(alone, alone+ALLOCATION, 'rw-p', '')], [(alone, ALLOCATION-8 | 1)]), '')
+        self.assertEqual(found([(alone, alone+ALLOCATION, 'rw-p', ' /usr/lib/x.so')], [(alone, size)]), '')
+        self.assertEqual(found([(alone, alone+ALLOCATION, 'r--p', '')], [(alone, size)]), '')
+        # a header with too little mapping after it
+        self.assertEqual(found([(alone, alone+ALLOCATION-4096, 'rw-p', '')], [(alone, size)]), '')
 
     def test_regional_capture_matches_exact_full_frame_crop_at_every_edge(self):
         start = 0x1000000

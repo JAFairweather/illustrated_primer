@@ -4,11 +4,11 @@ import copy
 import json
 import uuid
 from unittest.mock import Mock
-from notebook_hand_ink import hand_lines, hand_plans, WIDTH, MARGIN, SIZE, VELOCITY
+from notebook_hand_ink import hand_lines, hand_plans, end_plan, WIDTH, MARGIN, SIZE, VELOCITY
 from notebook_handwriting import handwriting_paths
 from notebook_ink_playback import validate_playback, playback_assets
 from notebook_drawing import HAND_STROKES
-from notebook_lesson_native import (prepare_semantic_reply, _bundle_from_compiled_lesson,
+from notebook_lesson_native import (prepare_semantic_reply, _bundle_from_compiled_lesson, prepare_head_reply,
                                     lesson_source_archive, inspect_source_archive)
 from notebook_semantic_examples import examples
 from notebook_stroke_asset import validate_native_ink_budget
@@ -86,7 +86,7 @@ class HandInkTests(unittest.TestCase):
             with self.subTest(hand=hand):
                 blocks=self.lesson(takeaway,hand)['blocks']
                 self.assertEqual(blocks[-1]['text'],'Takeaway: '+takeaway)
-                self.assertFalse(any(b.get('role')=='hand' for b in blocks))
+                self.assertEqual(any(b.get('role')=='hand' for b in blocks),hand is not None)  # captions still by hand
 
     def test_every_caption_is_written_where_its_typed_caption_stood(self):
         bundle=self.lesson('Two thirds is more than three fifths.')
@@ -116,12 +116,14 @@ class HandInkTests(unittest.TestCase):
         plan=EquationInkTests.six_step_plan(None)
         for stage in plan['stages']:stage['text']=LONG*3  # far past the handwriting budget
         blocks=_bundle_from_compiled_lesson(plan,playback=True,pen_equations=True,hand='primer')['blocks']
-        self.assertEqual([b['text'] for b in blocks if b['kind']=='text'][1:],[LONG*3]*6)
+        typed=[b['text'] for b in blocks if b['kind']=='text'][1:]  # the later captions, the earlier stay written
+        self.assertTrue(0 < len(typed) < 6 and typed == [LONG*3]*len(typed), len(typed))
         self.assertEqual(blocks[-1]['role'],'hand')
-        plan['stages'][0]['text']='Water boils at 100°.'  # one unwritable caption keeps every caption typed
+        plan['stages'][0]['text']='Water boils at 100°.'  # an unwritable caption is typed by itself
         plan['stages'][1:]=plan['stages'][1:2]
+        plan['stages'][1]['text']=LONG
         blocks=_bundle_from_compiled_lesson(plan,playback=True,pen_equations=True,hand='primer')['blocks']
-        self.assertEqual([b['text'] for b in blocks if b['kind']=='text'][1:],['Water boils at 100°.',LONG*3])
+        self.assertEqual([b['text'] for b in blocks if b['kind']=='text'][1:],['Water boils at 100°.'])
         self.assertEqual(blocks[-1]['role'],'hand')
 
     def test_the_reply_opens_with_the_readers_name_by_hand(self):
@@ -138,6 +140,68 @@ class HandInkTests(unittest.TestCase):
             plain=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand=hand,opening=opening)
             self.assertFalse(any(b.get('role')=='hand' for b in plain['blocks']))
 
+    def test_a_story_ends_with_the_end_centred_over_a_scroll(self):
+        spec=copy.deepcopy(examples()['fractions-variant'])
+        bundle=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand='letter',
+                                      opening='James, once upon a time...')
+        end=end_plan('letter')
+        self.assertEqual(bundle['blocks'][-1]['scene'],end['scene'])
+        self.assertEqual(bundle['sources'][-1]['source_page'],bundle['blocks'][-1]['source_page'])
+        xs=[x for path in end['stages'][0]['paths'] for x,_ in path]
+        self.assertAlmostEqual((min(xs)+max(xs))/2,WIDTH/2,delta=40)
+        self.assertNotIn(end['scene'],bundle['passages'])  # the narrator says "The end." on its own
+        validate_native_ink_budget(bundle['blocks'])
+        plain=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand='letter')
+        self.assertNotEqual(plain['blocks'][-1].get('scene'),end['scene'])  # no opening, no ending
+
+    def test_the_ending_is_left_out_before_any_passage_is_typed(self):
+        from test_notebook_equation_ink import EquationInkTests
+        plan=EquationInkTests.six_step_plan(None)
+        for stage in plan['stages']:stage['text']=LONG*3
+        blocks=_bundle_from_compiled_lesson(plan,playback=True,pen_equations=True,hand='primer',
+                                            opening='James, once upon a time...')['blocks']
+        self.assertNotEqual(blocks[-1]['scene'],end_plan('primer')['scene'])
+
+    def test_the_bundle_names_each_written_passage_by_its_first_block(self):
+        spec=copy.deepcopy(examples()['fractions-variant'])
+        opening='James, once upon a time...'
+        bundle=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand='primer',
+                                      opening=opening)
+        written=[b['scene'] for b in bundle['blocks'] if b.get('role')=='hand']
+        passages=bundle['passages']
+        self.assertEqual(passages[written[0]],opening)
+        self.assertEqual(list(passages.values())[1:],[s['caption'] for s in spec['steps']]+[spec['takeaway']])
+        self.assertTrue(set(passages)<=set(written))
+        typed=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand=None,opening=opening)
+        self.assertFalse(any(key.startswith('hand-') for key in typed['passages']))
+        self.assertEqual(list(typed['passages'].values()),[s['caption'] for s in spec['steps']])
+
+    def test_a_storys_head_and_rest_write_the_whole_reply_once(self):
+        spec=copy.deepcopy(examples()['fractions-variant'])
+        opening,first='James, once upon a time...',spec['steps'][0]['caption']
+        head=prepare_head_reply(opening,first,'primer')
+        written=[b for b in head['blocks'] if b.get('role')=='hand']
+        self.assertEqual(head['blocks'][0],dict(kind='text',text='',styles=[]))
+        self.assertEqual(len(written),len(head['blocks'])-1,'no picture, takeaway or ending in the head')
+        self.assertEqual(list(head['passages'].values()),[opening,first])
+        self.assertTrue(set(head['passages'])<={b['scene'] for b in written})
+        self.assertEqual([b['source_page'] for b in written],[s['source_page'] for s in head['sources']])
+        validate_native_ink_budget(head['blocks'])
+        whole=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand='primer',opening=opening)
+        rest=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand='primer',told=first)
+        self.assertEqual(list(rest['passages'].values()),[s['caption'] for s in spec['steps'][1:]]+[spec['takeaway']])
+        self.assertEqual(rest['blocks'][-1]['scene'],end_plan('primer')['scene'])  # "The End"
+        drawings=lambda bundle:[b['scene'] for b in bundle['blocks'] if b['kind']=='ink' and b.get('role')!='hand']
+        self.assertEqual(drawings(rest),drawings(whole),'the first caption\'s picture comes with the rest')
+        self.assertFalse(any(b['kind']=='text' and first in b.get('text','') for b in rest['blocks']))
+        validate_native_ink_budget(rest['blocks'])
+        parent='00000000-0000-4000-8000-000000000000'
+        for bundle in (head,rest):  # 11-02 (ab29bbaa): the head had no plan, and staging its archive raised
+            doc,data=lesson_source_archive(bundle,{'cPages':{},'fileType':'notebook'},parent)
+            self.assertEqual(doc,bundle['sources'][0]['source_doc'])
+        with self.assertRaises(ValueError):
+            prepare_head_reply(opening,first,None)
+
     def test_the_opening_stays_when_the_captions_fall_back_to_typed(self):
         from test_notebook_equation_ink import EquationInkTests
         plan=EquationInkTests.six_step_plan(None)
@@ -146,7 +210,37 @@ class HandInkTests(unittest.TestCase):
                                             opening='James, once upon a time...')['blocks']
         self.assertEqual(blocks[1]['role'],'hand')
         self.assertEqual(blocks[-1]['role'],'hand')
-        self.assertEqual([b['text'] for b in blocks if b['kind']=='text'][1:],[LONG*3]*6)
+        typed=[b['text'] for b in blocks if b['kind']=='text'][1:]
+        self.assertTrue(0 < len(typed) < 6 and typed == [LONG*3]*len(typed), len(typed))
+
+    def test_a_missing_letter_is_written_plain_and_only_an_unwritable_passage_is_typed(self):
+        # 2026-11-01 11:27: "Erdős" in three passages typed every caption and the takeaway.
+        spec=copy.deepcopy(examples()['fractions-variant'])
+        spec['steps'][0]['caption']='Paul Erdős asked it first.'
+        spec['steps'][1]['caption']='A dot \u2603 waited.'  # a snowman: no plain letter to fall back on
+        bundle=prepare_semantic_reply(json.dumps(spec),Mock(),playback=True,pen_equations=True,hand='letter',
+                                      opening='James, once upon a time...')
+        self.assertIn('Paul Erdős asked it first.',bundle['passages'].values())
+        typed=[key for key,text in bundle['passages'].items() if text=='A dot \u2603 waited.']
+        self.assertEqual([key.startswith('hand-') for key in typed],[False])  # said as its drawing starts
+        self.assertIn('A dot \u2603 waited.',[b.get('text') for b in bundle['blocks'] if b['kind']=='text'])
+        self.assertIn(spec['takeaway'],bundle['passages'].values())
+
+    def test_a_lesson_past_the_tablets_pages_keeps_its_earliest_passages_written(self):
+        # 2026-11-01 11:58: six long captions and a long takeaway in the letter hand made 21 pages; the tablet takes 19.
+        from test_notebook_equation_ink import EquationInkTests
+        from notebook_lesson_native import LESSON_PAGES
+        plan=EquationInkTests.six_step_plan(None)
+        for stage in plan['stages']:stage['text']=LONG+' '+LONG[:60]
+        plan['takeaway']=LONG*2
+        bundle=_bundle_from_compiled_lesson(plan,playback=True,pen_equations=True,hand='letter',
+                                            opening='James, once upon a time...')
+        self.assertLessEqual(len(bundle['sources']),LESSON_PAGES)
+        written=[text for key,text in bundle['passages'].items() if key.startswith('hand-')]
+        self.assertEqual(written[:2],['James, once upon a time...',plan['stages'][0]['text']])
+        self.assertEqual(written[-1],plan['takeaway'])
+        typed=[b['text'] for b in bundle['blocks'] if b['kind']=='text' and b['text']]
+        self.assertIn(plan['stages'][-1]['text'],typed)
 
     def test_handwriting_regions_are_renderer_owned_and_separate(self):
         blocks=self.lesson(LONG)['blocks']

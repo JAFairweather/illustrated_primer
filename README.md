@@ -10,10 +10,7 @@ told, narrated in the earbuds.
   (`notebook_*.py`), and `herd-board-primer`, which the R1 runs over ssh.
 - `r1/lib`: the R1 Primer app (`primer`, `feed`); `r1/ui`: its screen (`r1-primer-ui.c`).
 
-Split out of `JAFairweather/rabidrabbit` on 2026-11-01 (`tools/herd-board`, plus `lib/r1-primer` and
-`tools/r1-primer-ui` from `feat/r1-primer`), history kept. Branch `feat/voice-pacing` carries the undeployed voice
-pacing work. Decisions are logged in `~/.buzz/RESEARCH/HERD_BOARD_DECISIONS.md`; the plan is
-`~/.buzz/PLANS/PRIMER_A_PLAN.md`.
+Grew out of the herd-board notebook tools in a private repo, where its full development history stays.
 
 Tests: `python3 -m unittest` (about two minutes) and `node test_native_inline_ink.cjs`; `./herd-board-replay` before
 any deploy.

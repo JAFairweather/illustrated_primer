@@ -49,6 +49,11 @@ def resolve_labels(steps, dropped=None):
                     commands.append([])
                     continue
                 text=_text(command['text'],24)
+                if len(pending)==12 and dropped is not None:
+                    # Keep the first twelve: a retry for a thirteenth cost James's 2026-11-01 replies 20-35 s each.
+                    dropped.append((f'step {step_index+1} command {command_index+1}',text))
+                    commands.append([])
+                    continue
                 pending.append((step_index,command_index,target,text,targets[target]))
                 if len(pending)>12:
                     raise ValueError('use at most twelve anchored labels per lesson')
