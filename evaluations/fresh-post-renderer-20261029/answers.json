@@ -1,0 +1,537 @@
+{
+  "version": 1,
+  "report": {
+    "kind": "fresh-model-validation",
+    "model": "gpt-6-astra",
+    "compiler_commit": "243edec2ac4e49bebf27ac728225c44990f5c937",
+    "packet_sha256": "8fa20650898f1fdd06b3fde340b14426d561ac20e0c535e4075db075dd5c1090",
+    "prompt_sha256": "af7a9710fc6beaf9761be254d5feb7582f0a4445a93f008641138789c14e2ccf",
+    "first_pass_accepted": 3,
+    "attempted": 3,
+    "selection": "three fixed cases, not a random sample or full fourteen-question rerun",
+    "production_deadline_ms": 30000,
+    "tablet_proven": false,
+    "rows": [
+      {
+        "id": "fractions",
+        "valid": true,
+        "first_pass_valid": true,
+        "corrections_used": 0,
+        "wall_ms": 34360,
+        "model_ms": 33940,
+        "other_ms": 420,
+        "story_ms": 17927,
+        "panel_ms": 16013,
+        "calls": 5,
+        "first_model_text_ms": 2976,
+        "output_tokens": 628,
+        "quality_notes": "The same shaded half becomes two fourths; shading and subdivisions agree. Numeric axis labels add visual noise.",
+        "tablet_proven": false
+      },
+      {
+        "id": "integral",
+        "valid": true,
+        "first_pass_valid": true,
+        "corrections_used": 0,
+        "wall_ms": 34244,
+        "model_ms": 33467,
+        "other_ms": 777,
+        "story_ms": 19096,
+        "panel_ms": 14371,
+        "calls": 5,
+        "first_model_text_ms": 2973,
+        "output_tokens": 726,
+        "quality_notes": "The area and antiderivative calculation are correct. Exponents remain plain-text caret notation; this is not polished equation typesetting.",
+        "tablet_proven": false
+      },
+      {
+        "id": "inverse-mapping",
+        "valid": true,
+        "first_pass_valid": true,
+        "corrections_used": 0,
+        "wall_ms": 39375,
+        "model_ms": 38375,
+        "other_ms": 1000,
+        "story_ms": 21733,
+        "panel_ms": 16642,
+        "calls": 5,
+        "first_model_text_ms": 2798,
+        "output_tokens": 730,
+        "quality_notes": "The reversed arrows and short object labels make the ambiguity clear; the takeaway correctly qualifies the original domain.",
+        "tablet_proven": false
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "fractions",
+      "story": {
+        "v": 1,
+        "mode": "story",
+        "audience": "Beginning fraction learners",
+        "template": "explain_concept",
+        "question": "Show visually why one half and two fourths represent the same amount.",
+        "acts": [
+          {
+            "id": "same-whole",
+            "beat": "Subdivide one whole without changing its shaded amount."
+          }
+        ],
+        "panels": [
+          {
+            "id": "whole",
+            "act": "same-whole",
+            "title": "One whole",
+            "question": "What amount are we dividing?",
+            "new_idea": "Add an axes frame and a rectangular whole.",
+            "visual_kind": "Rectangular fraction model",
+            "caption": "This rectangle represents one whole.",
+            "base": null
+          },
+          {
+            "id": "half",
+            "act": "same-whole",
+            "title": "One half",
+            "question": "What does one half look like?",
+            "new_idea": "Add a hatched rectangular region covering exactly the left half; its boundary divides the whole into equal halves.",
+            "visual_kind": "Half-shaded rectangle",
+            "caption": "One of two equal parts is shaded: one half.",
+            "base": "whole"
+          },
+          {
+            "id": "fourths",
+            "act": "same-whole",
+            "title": "Two fourths",
+            "question": "What happens when each half is divided equally again?",
+            "new_idea": "Add a bounded horizontal midline across the rectangle, dividing both halves into four equal parts overall.",
+            "visual_kind": "Same shading in four equal parts",
+            "caption": "Now two of four equal parts are shaded: two fourths.",
+            "base": "half"
+          },
+          {
+            "id": "equal",
+            "act": "same-whole",
+            "title": "Same amount",
+            "question": "Why are these fractions equal?",
+            "new_idea": "Add the label '1/2 = 2/4' to the inherited shaded region.",
+            "visual_kind": "Equivalent fraction label",
+            "caption": "The shaded amount stayed unchanged; only the number of parts changed.",
+            "base": "fourths"
+          }
+        ],
+        "takeaway": "One half equals two fourths of the same whole: subdividing changes the parts, not the shaded amount."
+      },
+      "panels": {
+        "whole": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "whole",
+          "items": [
+            {
+              "id": "fraction-frame",
+              "type": "axes",
+              "x": [
+                0,
+                2
+              ],
+              "y": [
+                0,
+                1
+              ],
+              "aspect": "equal"
+            },
+            {
+              "id": "whole-rectangle",
+              "type": "rect",
+              "in": "fraction-frame",
+              "x": [
+                0,
+                2
+              ],
+              "y": [
+                0,
+                1
+              ],
+              "fill": "none"
+            }
+          ]
+        },
+        "half": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "half",
+          "items": [
+            {
+              "id": "shaded-half",
+              "type": "region",
+              "in": "fraction-frame",
+              "x": [
+                0,
+                1
+              ],
+              "y": [
+                0,
+                1
+              ],
+              "fill": "hatch"
+            }
+          ]
+        },
+        "fourths": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "fourths",
+          "items": [
+            {
+              "id": "horizontal-midline",
+              "type": "line",
+              "in": "fraction-frame",
+              "from": [
+                0,
+                0.5
+              ],
+              "to": [
+                2,
+                0.5
+              ]
+            }
+          ]
+        },
+        "equal": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "equal",
+          "items": [
+            {
+              "id": "equivalence-label",
+              "type": "label",
+              "to": "shaded-half",
+              "text": "1/2 = 2/4",
+              "side": "top"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "integral",
+      "story": {
+        "v": 1,
+        "mode": "story",
+        "audience": "Beginning calculus students",
+        "template": "solve",
+        "question": "Explain the definite integral of x squared from 0 to 1 using an area picture and compute it.",
+        "acts": [
+          {
+            "id": "area",
+            "beat": "Interpret the integral as a nonnegative area."
+          },
+          {
+            "id": "compute",
+            "beat": "Evaluate the area exactly using an antiderivative."
+          }
+        ],
+        "panels": [
+          {
+            "id": "setup",
+            "act": "area",
+            "title": "The interval",
+            "question": "Where is the area measured?",
+            "new_idea": "Add an axes frame spanning zero to one on both axes, with x and y axis titles.",
+            "visual_kind": "Unit interval coordinate frame",
+            "caption": "Measure area above the x-axis between zero and one.",
+            "base": null
+          },
+          {
+            "id": "region",
+            "act": "area",
+            "title": "Area under the parabola",
+            "question": "Which region represents the integral?",
+            "new_idea": "Add the hatched area under y=x squared from zero to one, including its curve outline and a curve label.",
+            "visual_kind": "Shaded parabolic region",
+            "caption": "Since x squared is nonnegative, its integral equals this area.",
+            "base": "setup"
+          },
+          {
+            "id": "antiderivative",
+            "act": "compute",
+            "title": "Compute, not estimate",
+            "question": "How can we calculate the shaded area exactly?",
+            "new_idea": "Add the explanatory label 'F(x) = x^3/3' to the shaded region.",
+            "visual_kind": "Area with antiderivative label",
+            "caption": "An antiderivative is x cubed divided by three.",
+            "base": "region"
+          },
+          {
+            "id": "result",
+            "act": "compute",
+            "title": "Evaluate the endpoints",
+            "question": "What is the definite integral?",
+            "new_idea": "Add the result label 'Area = 1/3' to the shaded region.",
+            "visual_kind": "Exact area annotation",
+            "caption": "The fundamental theorem gives F(1) minus F(0): one third.",
+            "base": "antiderivative"
+          }
+        ],
+        "takeaway": "The definite integral of x squared from 0 to 1 is 1/3 − 0 = 1/3 square units. The shading illustrates the area; the fundamental theorem computes it exactly."
+      },
+      "panels": {
+        "setup": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "setup",
+          "items": [
+            {
+              "id": "xy",
+              "type": "axes",
+              "x": [
+                0,
+                1
+              ],
+              "y": [
+                0,
+                1
+              ],
+              "aspect": "equal"
+            },
+            {
+              "id": "x-title",
+              "type": "label",
+              "to": "xy",
+              "text": "x",
+              "side": "bottom"
+            },
+            {
+              "id": "y-title",
+              "type": "label",
+              "to": "xy",
+              "text": "y",
+              "side": "left"
+            }
+          ]
+        },
+        "region": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "region",
+          "items": [
+            {
+              "id": "shaded-area",
+              "type": "area",
+              "in": "xy",
+              "coefficients": [
+                0,
+                0,
+                1
+              ],
+              "domain": [
+                0,
+                1
+              ],
+              "baseline": 0,
+              "fill": "hatch"
+            },
+            {
+              "id": "curve-label",
+              "type": "label",
+              "to": "shaded-area",
+              "text": "y = x^2",
+              "side": "top"
+            }
+          ]
+        },
+        "antiderivative": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "antiderivative",
+          "items": [
+            {
+              "id": "antiderivative-label",
+              "type": "label",
+              "to": "shaded-area",
+              "text": "F(x) = x^3/3",
+              "side": "right"
+            }
+          ]
+        },
+        "result": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "result",
+          "items": [
+            {
+              "id": "area-result",
+              "type": "label",
+              "to": "shaded-area",
+              "text": "Area = 1/3",
+              "side": "bottom"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "inverse-mapping",
+      "story": {
+        "v": 1,
+        "mode": "story",
+        "audience": "Students learning inverse functions",
+        "template": "explain_concept",
+        "question": "Explain visually why two different inputs with the same output prevent a function from having an inverse.",
+        "acts": [
+          {
+            "id": "mapping",
+            "beat": "Show distinct inputs sharing an output."
+          },
+          {
+            "id": "undoing",
+            "beat": "Show why reversing the mapping fails the function rule."
+          }
+        ],
+        "panels": [
+          {
+            "id": "values",
+            "act": "mapping",
+            "title": "Distinct inputs",
+            "question": "Which values are involved?",
+            "new_idea": "Add three symbolic circles labeled a, b, and y, with a and b representing distinct inputs and y an output.",
+            "visual_kind": "Three labeled value objects",
+            "caption": "Let a and b be different inputs, and y an output.",
+            "base": null
+          },
+          {
+            "id": "shared",
+            "act": "mapping",
+            "title": "One shared output",
+            "question": "What does the function do?",
+            "new_idea": "Add directional connections from a to y and b to y, showing the function's shared output.",
+            "visual_kind": "Two inputs converge on one output",
+            "caption": "The function sends both a and b to y.",
+            "base": "values"
+          },
+          {
+            "id": "reverse",
+            "act": "undoing",
+            "title": "Try to undo",
+            "question": "What would an inverse need to return?",
+            "new_idea": "Branch from the three unconnected values and add directional connections from y to a and y to b, representing the required inverse assignments.",
+            "visual_kind": "One value branches to two values",
+            "caption": "An inverse must send y back to both original inputs.",
+            "base": "values"
+          },
+          {
+            "id": "conflict",
+            "act": "undoing",
+            "title": "The conflict",
+            "question": "Why is this not an inverse function?",
+            "new_idea": "Add the explanatory label 'Two required outputs' to y, highlighting the branching inverse assignments.",
+            "visual_kind": "Label highlights ambiguous reversal",
+            "caption": "A function cannot assign two different outputs to one input.",
+            "base": "reverse"
+          }
+        ],
+        "takeaway": "A shared output cannot uniquely recover its original input, so no inverse function exists on the original domain. Restricting the domain may remove the conflict."
+      },
+      "panels": {
+        "values": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "values",
+          "items": [
+            {
+              "id": "a",
+              "type": "object",
+              "shape": "circle",
+              "position": "top-left"
+            },
+            {
+              "id": "b",
+              "type": "object",
+              "shape": "circle",
+              "position": "bottom-left"
+            },
+            {
+              "id": "y",
+              "type": "object",
+              "shape": "circle",
+              "position": "top-right"
+            },
+            {
+              "id": "label-a",
+              "type": "label",
+              "to": "a",
+              "text": "a",
+              "side": "left"
+            },
+            {
+              "id": "label-b",
+              "type": "label",
+              "to": "b",
+              "text": "b",
+              "side": "left"
+            },
+            {
+              "id": "label-y",
+              "type": "label",
+              "to": "y",
+              "text": "y",
+              "side": "right"
+            }
+          ]
+        },
+        "shared": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "shared",
+          "items": [
+            {
+              "id": "a-to-y",
+              "type": "connect",
+              "from": "a",
+              "to": "y"
+            },
+            {
+              "id": "b-to-y",
+              "type": "connect",
+              "from": "b",
+              "to": "y"
+            }
+          ]
+        },
+        "reverse": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "reverse",
+          "items": [
+            {
+              "id": "y-to-a",
+              "type": "connect",
+              "from": "y",
+              "to": "a"
+            },
+            {
+              "id": "y-to-b",
+              "type": "connect",
+              "from": "y",
+              "to": "b"
+            }
+          ]
+        },
+        "conflict": {
+          "v": 1,
+          "mode": "panel-shapes",
+          "panel": "conflict",
+          "items": [
+            {
+              "id": "inverse-conflict",
+              "type": "label",
+              "to": "y",
+              "text": "Two required outputs",
+              "side": "bottom"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

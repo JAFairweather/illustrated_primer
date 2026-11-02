@@ -1,0 +1,28 @@
+{
+  "reviewer": "DJ Codex",
+  "scope": "All 12 accepted ordinary cumulative contact sheets, the accepted Kakeya contact sheet, and untouched raw held answers. The inverse-mapping compiler-only replay was inspected separately. Not an independent expert grade, a repeatability estimate, or tablet evidence.",
+  "tablet_proven": false,
+  "live_promotion": false,
+  "ordinary": [
+    {"id":"integral","native_valid":true,"review":"Useful area explanation: successive lower sums visibly refine, and the caption derives 1/3 from an antiderivative. This is the stated elementary integral, not a general integration proof."},
+    {"id":"gravity","native_valid":true,"review":"Correct 4.9,19.6,44.1 positions and 4.9,14.7,24.5 interval distances. Sampled chart supports increasing distance; caption explicitly says straight links are guides rather than the exact parabola."},
+    {"id":"odd-squares","native_valid":true,"review":"L-shaped additions match 1,3,5,7; caption supplies the general k+(k-1) rule and explains counting the same square by borders versus area."},
+    {"id":"compound-interest","native_valid":true,"review":"Correct two series at shared scale and $3.10 final difference. Lines are close at this scale, but distinct markers and legend remain readable. States discrete annual compounding and interpolation limits."},
+    {"id":"transistor","native_valid":true,"review":"Conceptual low-side circuit has supply-to-lamp-to-collector path, grounded emitter, outward NPN arrow and base resistor. Captions follow additions; common-ground and startup-current caveats retained. Not a verified hardware build specification."},
+    {"id":"blue-sky","native_valid":true,"review":"Explicit physical arrows connect sunlight, scattering and observer. Captions and labels identify blue-rich scattered light and distinguish the schematic from blue-colored air. Does not derive wavelength dependence."},
+    {"id":"bayes","native_valid":true,"review":"Counts and totals are correct; final boxes identify 8 among17 positive results, not8/10 or8/100. Progressive grid demonstrates the conditional denominator."},
+    {"id":"fractions","native_valid":true,"review":"Equal-sized wholes, halves/fourths and equal shaded extents visibly support equivalence, with captions aligned to each addition."},
+    {"id":"water-cycle","native_valid":true,"review":"Distinct surface water, vapor and cloud-droplet states with correct process arrows and caption ordering. The graph layout is schematic, not a literal vertical path through the atmosphere; a more physical arrangement would improve presentation."},
+    {"id":"pythagoras","native_valid":true,"review":"Correct right triangle and outward side squares. Gives9+16=25 and5, explicitly an application of the theorem rather than a general proof."},
+    {"id":"inverse-mapping","native_valid":false,"review":"Original compiler held a clear-route failure. Raw plan meaning is appropriate: two inputs merge, then one output splits into both possible originals. Separate bounded joint-routing replay renders the identical answer; inspected diagram supports captions and preserves direction/stages. Do not count this as an original first-pass compiler success."},
+    {"id":"sensor-alarm","native_valid":false,"review":"Held because the third reveal group is empty. Prose gives the correct ambiguity, but the required visual step is absent. No inference, dropped step or model retry applied."},
+    {"id":"proof-dependency","native_valid":true,"review":"Explicit A AND B intermediate object distinguishes joint premises from alternative sufficient routes. Takeaway limits necessity to this proof route and admits another proof could avoidB. An improvement in the generated plan, not a new conjunction-specific engine branch."},
+    {"id":"dependency-failure","native_valid":true,"review":"Three cases show both available leads to success, and either missing dependency leads to failure. Captions state the no-other-fault assumption and connect the cases to AND/OR reasoning. Labels are fairly dense but readable."}
+  ],
+  "research": [
+    {"id":"aperiodic-hierarchy","native_valid":false,"review":"Held by24-character label cap (Must preserve every level has25 characters). Prose offers the forced-recognizable-hierarchy argument and separates existence from aperiodicity, but boxes form a logic outline rather than a drawn recursive tiling construction. No full mathematical verification claimed."},
+    {"id":"kakeya-dimension","native_valid":true,"review":"Useful conceptual illustration: three actual equal-length200-unit sample segments become20-unit-wide tubes, then6-unit-wide inner tubes. Their shared region and changing width are visible. Captions distinguish planar samples from3D all-directions geometry and dimension from positive volume. This introduces overlap and scale, but does not demonstrate the anti-clustering estimate or prove the theorem. The final crowded intersection could be clearer with a separate magnified view."},
+    {"id":"langlands-correspondence","native_valid":false,"review":"Held by native pen budget, not repaired. Prose distinguishes categories from underlying spaces and names the two approaches, but no valid rendered lesson exists. Full mathematical correctness has not been independently reviewed."}
+  ],
+  "conclusion": "The current grammar can express useful dynamically generated explanations, including one source-grounded research concept, without theorem-specific primitives. This single higher-budget sample does not establish reliability or acceptable live latency. Plan quality, schema adherence, routing and pen-budget compliance remain distinct failure classes. Keep the original trial separate from compiler-only replays."
+}

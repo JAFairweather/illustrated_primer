@@ -1,0 +1,17 @@
+{
+  "valid": false,
+  "geometry_validated": false,
+  "ink_encoding_validated": false,
+  "native_delivery_supported": false,
+  "tablet_proven": false,
+  "model_calls": 0,
+  "quality_status": "unreviewed",
+  "preview_complete": false,
+  "panels": [],
+  "source_sha256": {
+    "story": "544586a2a217fe187a49d4bc6341000d095210302b2f6be4d7ae1a0c16fb0b3d",
+    "shapes": "322fb1022f2be2921fb9eeb43ef5f846cb080b4877f8d5a649a4acc3bd1e823e"
+  },
+  "error": "label placement search budget exceeded",
+  "error_type": "LabelPlacementError"
+}

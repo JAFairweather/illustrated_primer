@@ -1,0 +1,8 @@
+{
+	"name": "Field Dispatches",
+	"loadsBackend": false,
+	"entry": "/ui/dispatches.qml",
+	"id": "field-dispatches",
+	"supportsScaling": false,
+	"canHaveMultipleFrontends": false
+}

@@ -1,0 +1,910 @@
+{
+  "run": {
+    "model": "gpt-6-luna",
+    "compiler_commit": "3fb26003bce103963aebd77101e8ea6df5fef403",
+    "source_export": "vc-FmFDTH",
+    "packet_sha256": "8fa20650898f1fdd06b3fde340b14426d561ac20e0c535e4075db075dd5c1090",
+    "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+    "host_configuration_verified": true,
+    "host_prompt_attested": false,
+    "tablet_proven": false,
+    "retries": 0,
+    "rows": [
+      {
+        "id": "fractions",
+        "valid": true,
+        "first_pass_valid": true,
+        "call_attempts": 1,
+        "preparation_ms": 13148,
+        "model_wall_ms": 13041,
+        "error": null,
+        "transport_error": null,
+        "result": "fractions/result.json"
+      },
+      {
+        "id": "integral",
+        "valid": true,
+        "first_pass_valid": true,
+        "call_attempts": 1,
+        "preparation_ms": 5968,
+        "model_wall_ms": 5785,
+        "error": null,
+        "transport_error": null,
+        "result": "integral/result.json"
+      },
+      {
+        "id": "inverse-mapping",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 7763,
+        "error": "invalid semantic reply: panel caption exceeds twelve whitespace-delimited words",
+        "transport_error": null,
+        "result": "inverse-mapping/result.json"
+      },
+      {
+        "id": "gravity",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 10725,
+        "error": "invalid semantic reply: unsupported diagram-label glyph",
+        "transport_error": null,
+        "result": "gravity/result.json"
+      },
+      {
+        "id": "odd-squares",
+        "valid": true,
+        "first_pass_valid": true,
+        "call_attempts": 1,
+        "preparation_ms": 15024,
+        "model_wall_ms": 14864,
+        "error": null,
+        "transport_error": null,
+        "result": "odd-squares/result.json"
+      },
+      {
+        "id": "compound-interest",
+        "valid": true,
+        "first_pass_valid": true,
+        "call_attempts": 1,
+        "preparation_ms": 7359,
+        "model_wall_ms": 7043,
+        "error": null,
+        "transport_error": null,
+        "result": "compound-interest/result.json"
+      },
+      {
+        "id": "transistor",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 6484,
+        "error": null,
+        "transport_error": null,
+        "result": "transistor/result.json"
+      },
+      {
+        "id": "blue-sky",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 8246,
+        "error": null,
+        "transport_error": null,
+        "result": "blue-sky/result.json"
+      },
+      {
+        "id": "bayes",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 12450,
+        "error": "invalid semantic reply: panel requires more than 64 strokes before label placement",
+        "transport_error": null,
+        "result": "bayes/result.json"
+      },
+      {
+        "id": "water-cycle",
+        "valid": true,
+        "first_pass_valid": true,
+        "call_attempts": 1,
+        "preparation_ms": 10620,
+        "model_wall_ms": 10564,
+        "error": null,
+        "transport_error": null,
+        "result": "water-cycle/result.json"
+      },
+      {
+        "id": "pythagoras",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 11424,
+        "error": "invalid semantic reply: panel caption exceeds twelve whitespace-delimited words",
+        "transport_error": null,
+        "result": "pythagoras/result.json"
+      },
+      {
+        "id": "sensor-alarm",
+        "valid": true,
+        "first_pass_valid": true,
+        "call_attempts": 1,
+        "preparation_ms": 8545,
+        "model_wall_ms": 8369,
+        "error": null,
+        "transport_error": null,
+        "result": "sensor-alarm/result.json"
+      },
+      {
+        "id": "proof-dependency",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 10891,
+        "error": "invalid semantic reply: provide exactly one typed-shape draft for every story panel",
+        "transport_error": null,
+        "result": "proof-dependency/result.json"
+      },
+      {
+        "id": "dependency-failure",
+        "valid": false,
+        "first_pass_valid": false,
+        "call_attempts": 1,
+        "preparation_ms": null,
+        "model_wall_ms": 12723,
+        "error": "use lesson, story-lesson, answer, or clarify",
+        "transport_error": null,
+        "result": "dependency-failure/result.json"
+      }
+    ]
+  },
+  "review": {
+    "first_pass_valid": 6,
+    "questions": 14,
+    "retries": 0,
+    "successful_preparation_ms": {
+      "min": 5968,
+      "median": 9582.5,
+      "max": 15024
+    },
+    "success_under_10s": 3,
+    "tablet_proven": false,
+    "controlled_comparison": false,
+    "rows": [
+      {
+        "id": "fractions",
+        "valid": true,
+        "measured_ms": 13148,
+        "timing_meaning": "Generation + validated native preparation",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": null,
+        "panel_count": 2,
+        "visual_review": "Final picture reviewed: equal shaded lengths are correct, but only two panels and unnecessary axes weaken the lesson."
+      },
+      {
+        "id": "integral",
+        "valid": true,
+        "measured_ms": 5968,
+        "timing_meaning": "Generation + validated native preparation",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": null,
+        "panel_count": 3,
+        "visual_review": "Final picture reviewed: area under x squared on [0,1] is correctly shown as 1/3. Full playback and tablet presentation remain unverified."
+      },
+      {
+        "id": "inverse-mapping",
+        "valid": false,
+        "measured_ms": 7764,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": "invalid semantic reply: panel caption exceeds twelve whitespace-delimited words",
+        "clarification": null,
+        "panel_count": 0,
+        "visual_review": "First pass rejected: caption exceeds twelve words. No shortening or retry was performed."
+      },
+      {
+        "id": "gravity",
+        "valid": false,
+        "measured_ms": 10768,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": "invalid semantic reply: unsupported diagram-label glyph",
+        "clarification": null,
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      },
+      {
+        "id": "odd-squares",
+        "valid": true,
+        "measured_ms": 15024,
+        "timing_meaning": "Generation + validated native preparation",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": null,
+        "panel_count": 3,
+        "visual_review": "Final picture FAIL: the label for the inner square lands inside the later top strip, assigning area to the wrong region. The algebra is correct; label ownership is not. No tablet test."
+      },
+      {
+        "id": "compound-interest",
+        "valid": true,
+        "measured_ms": 7359,
+        "timing_meaning": "Generation + validated native preparation",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": null,
+        "panel_count": 4,
+        "visual_review": "Final picture reviewed: samples and endpoints are correct. The two growth labels lack clear ownership between close lines; do not count this as polished teaching. No tablet test."
+      },
+      {
+        "id": "transistor",
+        "valid": false,
+        "measured_ms": 6485,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": "The available drawing shapes cannot faithfully show a transistor, resistor, and wired low-side circuit; a symbolic object diagram could misrepresent the circuit.",
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      },
+      {
+        "id": "blue-sky",
+        "valid": false,
+        "measured_ms": 8248,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": "The available drawing shapes cannot honestly show air molecules scattering sunlight without depicting clouds or implying the air itself is blue. An accurate visual needs a way to depict the scattering medium and scattered light.",
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      },
+      {
+        "id": "bayes",
+        "valid": false,
+        "measured_ms": 12474,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": "invalid semantic reply: panel requires more than 64 strokes before label placement",
+        "clarification": null,
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      },
+      {
+        "id": "water-cycle",
+        "valid": true,
+        "measured_ms": 10620,
+        "timing_meaning": "Generation + validated native preparation",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": null,
+        "panel_count": 4,
+        "visual_review": "Final picture inspected: sun, water, cloud and directed cycle are present. Caption-led playback and scientific teaching quality still require review; not a tablet pass."
+      },
+      {
+        "id": "pythagoras",
+        "valid": false,
+        "measured_ms": 11426,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": "invalid semantic reply: panel caption exceeds twelve whitespace-delimited words",
+        "clarification": null,
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      },
+      {
+        "id": "sensor-alarm",
+        "valid": true,
+        "measured_ms": 8545,
+        "timing_meaning": "Generation + validated native preparation",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": null,
+        "clarification": null,
+        "panel_count": 2,
+        "visual_review": "Final picture inspected: two sensors feed one alarm. Arrows alone do not establish the logical behavior; caption-led playback remains to be reviewed. Not a tablet pass."
+      },
+      {
+        "id": "proof-dependency",
+        "valid": false,
+        "measured_ms": 10897,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": "invalid semantic reply: provide exactly one typed-shape draft for every story panel",
+        "clarification": null,
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      },
+      {
+        "id": "dependency-failure",
+        "valid": false,
+        "measured_ms": 12723,
+        "timing_meaning": "Time to failure/clarification",
+        "calls": 1,
+        "model": "gpt-6-luna",
+        "original_serial_model": "gpt-5.6-luna",
+        "error": "use lesson, story-lesson, answer, or clarify",
+        "clarification": null,
+        "panel_count": 0,
+        "visual_review": "Not yet visually reviewed; schema pass is not teaching-quality proof."
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "fractions",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"beginning fraction learners\",\"template\":\"explain_concept\",\"question\":\"Show visually why one half and two fourths represent the same amount.\",\"acts\":[{\"id\":\"halves\",\"beat\":\"Show one of two equal parts of a whole.\"},{\"id\":\"fourths\",\"beat\":\"Compare that amount with two of four equal parts.\"}],\"panels\":[{\"id\":\"p1\",\"act\":\"halves\",\"title\":\"One half\",\"question\":\"What does one half look like?\",\"new_idea\":\"Shade one of two equal parts of a whole.\",\"visual_kind\":\"bar divided into halves\",\"caption\":\"One of two equal parts is one half.\",\"base\":null},{\"id\":\"p2\",\"act\":\"fourths\",\"title\":\"Two fourths\",\"question\":\"How does two fourths compare?\",\"new_idea\":\"A matching whole split into fourths has two shaded parts of the same width.\",\"visual_kind\":\"compare equal shaded bar lengths\",\"caption\":\"Two fourths cover the same length as one half.\",\"base\":\"p1\"}],\"takeaway\":\"One half and two fourths represent the same amount because their shaded lengths match.\"},\"panels\":{\"p1\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p1\",\"items\":[{\"id\":\"frame\",\"type\":\"axes\",\"x\":[0,4],\"y\":[0,3.5],\"aspect\":\"independent\"},{\"id\":\"whole1\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,4],\"y\":[0,1]},{\"id\":\"halfshade\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,2],\"y\":[0,1],\"fill\":\"hatch\"},{\"id\":\"halfcut\",\"type\":\"line\",\"in\":\"frame\",\"from\":[2,0],\"to\":[2,1]},{\"id\":\"halflabel\",\"type\":\"label\",\"to\":\"halfshade\",\"text\":\"1/2\",\"side\":\"top\"}]},\"p2\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p2\",\"items\":[{\"id\":\"whole2\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,4],\"y\":[2,3]},{\"id\":\"fourshade\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,2],\"y\":[2,3],\"fill\":\"hatch\"},{\"id\":\"cut1\",\"type\":\"line\",\"in\":\"frame\",\"from\":[1,2],\"to\":[1,3]},{\"id\":\"cut2\",\"type\":\"line\",\"in\":\"frame\",\"from\":[2,2],\"to\":[2,3]},{\"id\":\"cut3\",\"type\":\"line\",\"in\":\"frame\",\"from\":[3,2],\"to\":[3,3]},{\"id\":\"fourlabel\",\"type\":\"label\",\"to\":\"fourshade\",\"text\":\"2/4\",\"side\":\"top\"}]}}}",
+      "response_sha256": "715a6b38e08744883f518fc1d974ab35febd0a0caa2afe6c9a5a8432e6383f52",
+      "result": {
+        "valid": true,
+        "native_preparation_valid": true,
+        "first_pass_valid": true,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 13033,
+          "first_text_ms": 8845,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2802,
+            "output": 995,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 13041,
+        "preparation_ms": 13148,
+        "delivery_points": 2834,
+        "snapshot_points": 4457,
+        "picture_runs": 1,
+        "preview_ms": 72,
+        "wall_ms": 13220
+      }
+    },
+    {
+      "id": "integral",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Students learning definite integrals\",\"template\":\"explain_result\",\"question\":\"Explain the definite integral of x squared from 0 to 1 using an area picture and compute it.\",\"acts\":[{\"id\":\"area\",\"beat\":\"Show the curve and the region whose area the integral represents.\"},{\"id\":\"compute\",\"beat\":\"Evaluate the accumulated area exactly.\"}],\"panels\":[{\"id\":\"p1\",\"act\":\"area\",\"title\":\"The curve\",\"question\":\"What graph defines the area?\",\"new_idea\":\"Graph y=x² on the interval from 0 to 1.\",\"visual_kind\":\"quadratic curve on axes\",\"caption\":\"The curve y=x² rises from (0,0) to (1,1).\",\"base\":null},{\"id\":\"p2\",\"act\":\"area\",\"title\":\"The region\",\"question\":\"Which area is accumulated?\",\"new_idea\":\"Shade between the curve and x-axis from 0 to 1.\",\"visual_kind\":\"shaded area under a curve\",\"caption\":\"The definite integral is the area beneath the curve on [0,1].\",\"base\":\"p1\"},{\"id\":\"p3\",\"act\":\"compute\",\"title\":\"Exact value\",\"question\":\"What is that area?\",\"new_idea\":\"Conclude the exact signed area using an antiderivative.\",\"visual_kind\":\"same shaded area with result label\",\"caption\":\"An antiderivative gives [x³/3]₀¹ = 1/3.\",\"base\":\"p2\"}],\"takeaway\":\"Because x² is nonnegative on [0,1], its definite integral equals the area under its curve there, exactly 1/3.\"},\"panels\":{\"p1\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p1\",\"items\":[{\"id\":\"ax\",\"type\":\"axes\",\"x\":[0,1],\"y\":[0,1],\"aspect\":\"independent\"},{\"id\":\"curve\",\"type\":\"plot\",\"in\":\"ax\",\"coefficients\":[0,0,1],\"domain\":[0,1]},{\"id\":\"xlabel\",\"type\":\"label\",\"to\":\"ax\",\"text\":\"x\",\"side\":\"bottom\"},{\"id\":\"ylabel\",\"type\":\"label\",\"to\":\"ax\",\"text\":\"y\",\"side\":\"left\"}]},\"p2\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p2\",\"items\":[{\"id\":\"shading\",\"type\":\"area\",\"in\":\"ax\",\"coefficients\":[0,0,1],\"domain\":[0,1],\"baseline\":0,\"fill\":\"hatch\"}]},\"p3\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p3\",\"items\":[{\"id\":\"result\",\"type\":\"label\",\"to\":\"shading\",\"text\":\"area = 1/3\",\"side\":\"top\"}]}}}",
+      "response_sha256": "6a6fdc58e3c1df21b19aa277448699257c39030aaa7a7e309ed7278fa4da9dbd",
+      "result": {
+        "valid": true,
+        "native_preparation_valid": true,
+        "first_pass_valid": true,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 5777,
+          "first_text_ms": 1357,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2809,
+            "output": 589,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 5785,
+        "preparation_ms": 5968,
+        "delivery_points": 2164,
+        "snapshot_points": 4926,
+        "picture_runs": 1,
+        "preview_ms": 102,
+        "wall_ms": 6069
+      }
+    },
+    {
+      "id": "inverse-mapping",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Learners studying functions and inverses\",\"template\":\"explain_concept\",\"question\":\"Explain visually why two different inputs with the same output prevent a function from having an inverse.\",\"acts\":[{\"id\":\"setup\",\"beat\":\"Introduce two distinct inputs and one shared output.\"},{\"id\":\"collision\",\"beat\":\"Show both inputs mapping to the same output.\"},{\"id\":\"reverse\",\"beat\":\"Show why reversing the mapping is not a function.\"}],\"panels\":[{\"id\":\"p1\",\"act\":\"setup\",\"title\":\"Inputs and output\",\"question\":\"Which values are involved?\",\"new_idea\":\"Set up two different inputs and one output.\",\"visual_kind\":\"symbolic input-output objects\",\"caption\":\"Two distinct inputs, x₁ and x₂, share one output y.\",\"base\":null},{\"id\":\"p2\",\"act\":\"collision\",\"title\":\"Same output\",\"question\":\"What does the function do?\",\"new_idea\":\"Connect each input to the shared output.\",\"visual_kind\":\"two arrows to one output\",\"caption\":\"The function sends both inputs to the same output.\",\"base\":\"p1\"},{\"id\":\"p3\",\"act\":\"reverse\",\"title\":\"Reversing fails\",\"question\":\"Can the inverse assign an output to each input?\",\"new_idea\":\"Reverse the arrows; y would point to both inputs.\",\"visual_kind\":\"competing reverse arrows\",\"caption\":\"The inverse would send y to two inputs, so it is not a function.\",\"base\":\"p2\"}],\"takeaway\":\"A function has an inverse function only if each output comes from at most one input; otherwise reversing the relation gives one input multiple outputs.\"},\"panels\":{\"p1\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p1\",\"items\":[{\"id\":\"xone\",\"type\":\"object\",\"shape\":\"circle\",\"position\":\"top-left\"},{\"id\":\"xtwo\",\"type\":\"object\",\"shape\":\"circle\",\"position\":\"bottom-left\"},{\"id\":\"y\",\"type\":\"object\",\"shape\":\"circle\",\"position\":\"top-right\"},{\"id\":\"lxone\",\"type\":\"label\",\"to\":\"xone\",\"text\":\"x₁\",\"side\":\"left\"},{\"id\":\"lxtwo\",\"type\":\"label\",\"to\":\"xtwo\",\"text\":\"x₂\",\"side\":\"left\"},{\"id\":\"ly\",\"type\":\"label\",\"to\":\"y\",\"text\":\"y\",\"side\":\"right\"}]},\"p2\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p2\",\"items\":[{\"id\":\"forwardone\",\"type\":\"connect\",\"from\":\"xone\",\"to\":\"y\"},{\"id\":\"forwardtwo\",\"type\":\"connect\",\"from\":\"xtwo\",\"to\":\"y\"}]},\"p3\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p3\",\"items\":[{\"id\":\"reverseone\",\"type\":\"connect\",\"from\":\"y\",\"to\":\"xone\"},{\"id\":\"reversetwo\",\"type\":\"connect\",\"from\":\"y\",\"to\":\"xtwo\"}]}}}",
+      "response_sha256": "e443171bd9334c29748c636caef795521591d5db255e4666d09bf8025f833f50",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 7760,
+          "first_text_ms": 4919,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2806,
+            "output": 797,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 7763,
+        "failed_phase": "whole-lesson",
+        "error": "invalid semantic reply: panel caption exceeds twelve whitespace-delimited words",
+        "error_type": "SemanticError",
+        "wall_ms": 7764
+      }
+    },
+    {
+      "id": "gravity",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Learner studying introductory physics\",\"template\":\"explain_concept\",\"question\":\"Why does an apple dropped from rest fall farther in each equal time interval? Ignore air resistance.\",\"acts\":[{\"id\":\"motion\",\"beat\":\"Connect falling distance to increasing speed under gravity\"}],\"panels\":[{\"id\":\"curve\",\"act\":\"motion\",\"title\":\"Distance grows quadratically\",\"question\":\"How does falling distance change over time?\",\"new_idea\":\"With constant gravitational acceleration and a start from rest, distance is proportional to time squared.\",\"visual_kind\":\"downward-distance versus time graph\",\"caption\":\"From rest, constant gravity makes falling distance grow as time squared.\",\"base\":null},{\"id\":\"marks\",\"act\":\"motion\",\"title\":\"Equal time steps\",\"question\":\"What happens at equal time intervals?\",\"new_idea\":\"Mark equal time steps on the curve to compare the distances fallen.\",\"visual_kind\":\"graph with equal-time position marks\",\"caption\":\"At equal times, the curve’s positions become increasingly far apart.\",\"base\":\"curve\"},{\"id\":\"gaps\",\"act\":\"motion\",\"title\":\"Growing interval distances\",\"question\":\"Why is each interval’s fall longer?\",\"new_idea\":\"Show that successive equal-time intervals cover distances proportional to 1, 3, and 5.\",\"visual_kind\":\"graph with successive interval distances\",\"caption\":\"The successive falls scale as 1, 3, then 5: speed keeps increasing.\",\"base\":\"marks\"}],\"takeaway\":\"Ignoring air resistance, gravity gives the apple constant downward acceleration; starting from rest, its speed increases, so equal time intervals contain progressively greater falls.\"},\"panels\":{\"curve\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"curve\",\"items\":[{\"id\":\"frame\",\"type\":\"axes\",\"x\":[0,3],\"y\":[0,9],\"aspect\":\"independent\"},{\"id\":\"curveplot\",\"type\":\"plot\",\"in\":\"frame\",\"coefficients\":[0,0,1],\"domain\":[0,3]},{\"id\":\"timelabel\",\"type\":\"label\",\"to\":\"frame\",\"text\":\"time\",\"side\":\"bottom\"},{\"id\":\"distlabel\",\"type\":\"label\",\"to\":\"frame\",\"text\":\"downward distance\",\"side\":\"left\"},{\"id\":\"lawlabel\",\"type\":\"label\",\"to\":\"curveplot\",\"text\":\"d ∝ t²\",\"side\":\"top\"}]},\"marks\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"marks\",\"items\":[{\"id\":\"p0\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[0,0]},{\"id\":\"p1\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[1,1]},{\"id\":\"p2\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[2,4]},{\"id\":\"p3\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[3,9]}]},\"gaps\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"gaps\",\"items\":[{\"id\":\"gap1\",\"type\":\"line\",\"in\":\"frame\",\"from\":[0.5,0],\"to\":[0.5,1]},{\"id\":\"gap2\",\"type\":\"line\",\"in\":\"frame\",\"from\":[1.5,1],\"to\":[1.5,4]},{\"id\":\"gap3\",\"type\":\"line\",\"in\":\"frame\",\"from\":[2.5,4],\"to\":[2.5,9]},{\"id\":\"ratio\",\"type\":\"label\",\"to\":\"gap3\",\"text\":\"1:3:5\",\"side\":\"right\"}]}}}",
+      "response_sha256": "3f86e3d7b528f98ce3ecce03a9b87e935083fd497caefef304a114d5bc50792c",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 10709,
+          "first_text_ms": 7373,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2807,
+            "output": 1255,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 10725,
+        "failed_phase": "whole-lesson",
+        "error": "invalid semantic reply: unsupported diagram-label glyph",
+        "error_type": "SemanticError",
+        "wall_ms": 10768
+      }
+    },
+    {
+      "id": "odd-squares",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Learners studying sums and proof\",\"template\":\"explain_concept\",\"question\":\"Show why the sum of the first n odd numbers equals n squared, not just a few numerical examples.\",\"acts\":[{\"id\":\"build\",\"beat\":\"Show how the next odd number extends a square\"},{\"id\":\"prove\",\"beat\":\"Connect square growth to the general sum\"}],\"panels\":[{\"id\":\"start\",\"act\":\"build\",\"title\":\"A smaller square\",\"question\":\"What does the previous sum represent?\",\"new_idea\":\"The first n−1 odd numbers make a square of side n−1.\",\"visual_kind\":\"square with a smaller square inside\",\"caption\":\"Imagine the first n−1 odd numbers forming a square.\",\"base\":null},{\"id\":\"border\",\"act\":\"build\",\"title\":\"Add the next layer\",\"question\":\"How many units complete the next square?\",\"new_idea\":\"The added L-shaped border has n units on one side and n−1 on the other: 2n−1 altogether.\",\"visual_kind\":\"square with an L-shaped border\",\"caption\":\"The new border has n+(n−1)=2n−1 units.\",\"base\":\"start\"},{\"id\":\"result\",\"act\":\"prove\",\"title\":\"The general step\",\"question\":\"Why does this establish the formula for every n?\",\"new_idea\":\"Starting with zero, each odd number adds exactly the border that grows the previous square into the next one.\",\"visual_kind\":\"completed square and labeled border\",\"caption\":\"Thus each successive odd number builds the next square.\",\"base\":\"border\"}],\"takeaway\":\"Starting with 0=0², adding the next odd number 2n−1 changes (n−1)² into (n−1)²+(2n−1)=n². Therefore 1+3+⋯+(2n−1)=n² for every positive integer n.\"},\"panels\":{\"start\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"start\",\"items\":[{\"id\":\"frame\",\"type\":\"axes\",\"x\":[0,4],\"y\":[0,4],\"aspect\":\"equal\"},{\"id\":\"inner\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,3],\"y\":[0,3]},{\"id\":\"innerlabel\",\"type\":\"label\",\"to\":\"inner\",\"text\":\"(n−1)²\",\"side\":\"auto\"}]},\"border\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"border\",\"items\":[{\"id\":\"side\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[3,4],\"y\":[0,4]},{\"id\":\"top\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,3],\"y\":[3,4]},{\"id\":\"sidelabel\",\"type\":\"label\",\"to\":\"side\",\"text\":\"n\",\"side\":\"right\"},{\"id\":\"toplabel\",\"type\":\"label\",\"to\":\"top\",\"text\":\"n−1\",\"side\":\"top\"}]},\"result\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"result\",\"items\":[{\"id\":\"outer\",\"type\":\"rect\",\"in\":\"frame\",\"x\":[0,4],\"y\":[0,4]},{\"id\":\"borderlabel\",\"type\":\"label\",\"to\":\"side\",\"text\":\"2n−1 total\",\"side\":\"right\"}]}}}",
+      "response_sha256": "5d44a11782c54d8df28fdbcef0981773fa225678b18647b9f1946809c6a219db",
+      "result": {
+        "valid": true,
+        "native_preparation_valid": true,
+        "first_pass_valid": true,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 14857,
+          "first_text_ms": 11099,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2809,
+            "output": 1316,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 14864,
+        "preparation_ms": 15024,
+        "delivery_points": 2136,
+        "snapshot_points": 4404,
+        "picture_runs": 1,
+        "preview_ms": 92,
+        "wall_ms": 15116
+      }
+    },
+    {
+      "id": "compound-interest",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Learners comparing simple and percentage growth\",\"template\":\"compare\",\"question\":\"Compare $100 growing at 10% per year with $100 gaining $10 per year over three years.\",\"acts\":[{\"id\":\"compare-growth\",\"beat\":\"Track both balances year by year and identify why they diverge.\"}],\"panels\":[{\"id\":\"setup\",\"act\":\"compare-growth\",\"title\":\"Same start\",\"question\":\"How do the two balances begin?\",\"new_idea\":\"Both begin at $100 at year zero.\",\"visual_kind\":\"paired balance paths on a shared graph\",\"caption\":\"Both balances start at $100.\",\"base\":null},{\"id\":\"fixed\",\"act\":\"compare-growth\",\"title\":\"Fixed gain\",\"question\":\"What happens when $10 is added each year?\",\"new_idea\":\"The fixed-gain balance rises by $10 yearly to $130.\",\"visual_kind\":\"add a straight fixed-gain path\",\"caption\":\"Adding a fixed $10 yearly reaches $130.\",\"base\":\"setup\"},{\"id\":\"percent\",\"act\":\"compare-growth\",\"title\":\"Percentage gain\",\"question\":\"What does 10% growth produce?\",\"new_idea\":\"The percentage path reaches $133.10 after yearly growth on the current balance.\",\"visual_kind\":\"add a curved percentage-growth path\",\"caption\":\"Ten percent of the growing balance reaches $133.10.\",\"base\":\"fixed\"},{\"id\":\"takeaway\",\"act\":\"compare-growth\",\"title\":\"Compare endings\",\"question\":\"Which balance is larger after three years?\",\"new_idea\":\"Mark the two ending balances for direct comparison.\",\"visual_kind\":\"highlight both final balances\",\"caption\":\"Percentage growth ends $3.10 higher after three years.\",\"base\":\"percent\"}],\"takeaway\":\"With annual compounding, $100 at 10% becomes $133.10; adding $10 yearly becomes $130, so percentage growth is $3.10 higher after three years.\"},\"panels\":{\"setup\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"setup\",\"items\":[{\"id\":\"frame\",\"type\":\"axes\",\"x\":[0,3],\"y\":[95,135],\"aspect\":\"independent\"},{\"id\":\"start\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[0,100]},{\"id\":\"yearaxis\",\"type\":\"label\",\"to\":\"frame\",\"text\":\"Year\",\"side\":\"bottom\"},{\"id\":\"balanceaxis\",\"type\":\"label\",\"to\":\"frame\",\"text\":\"Dollars\",\"side\":\"left\"}]},\"fixed\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"fixed\",\"items\":[{\"id\":\"fixedpath\",\"type\":\"polyline\",\"in\":\"frame\",\"points\":[[0,100],[1,110],[2,120],[3,130]]},{\"id\":\"fixedlabel\",\"type\":\"label\",\"to\":\"fixedpath\",\"text\":\"+$10 yearly\",\"side\":\"bottom\"}]},\"percent\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"percent\",\"items\":[{\"id\":\"percentpath\",\"type\":\"polyline\",\"in\":\"frame\",\"points\":[[0,100],[1,110],[2,121],[3,133.1]]},{\"id\":\"percentlabel\",\"type\":\"label\",\"to\":\"percentpath\",\"text\":\"10% yearly\",\"side\":\"top\"}]},\"takeaway\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"takeaway\",\"items\":[{\"id\":\"fixedend\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[3,130]},{\"id\":\"percentend\",\"type\":\"dot\",\"in\":\"frame\",\"at\":[3,133.1]},{\"id\":\"fixedendlabel\",\"type\":\"label\",\"to\":\"fixedend\",\"text\":\"$130\",\"side\":\"bottom\"},{\"id\":\"percentendlabel\",\"type\":\"label\",\"to\":\"percentend\",\"text\":\"$133.10\",\"side\":\"top\"}]}}}",
+      "response_sha256": "d469bb68caf2938911d114f67651ecf456dcf908d8ade8320f69992767b022ea",
+      "result": {
+        "valid": true,
+        "native_preparation_valid": true,
+        "first_pass_valid": true,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 7039,
+          "first_text_ms": 1504,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2810,
+            "output": 794,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 7043,
+        "preparation_ms": 7359,
+        "delivery_points": 2198,
+        "snapshot_points": 6119,
+        "picture_runs": 1,
+        "preview_ms": 169,
+        "wall_ms": 7528
+      }
+    },
+    {
+      "id": "transistor",
+      "response": "{\"v\":1,\"mode\":\"clarify\",\"text\":\"The available drawing shapes cannot faithfully show a transistor, resistor, and wired low-side circuit; a symbolic object diagram could misrepresent the circuit.\"}",
+      "response_sha256": "23e3f75dcea613f9d23da77f587adfe8acc1679885be93fa97cde85eb0cacb6f",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 6480,
+          "first_text_ms": 6300,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2810,
+            "output": 228,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 6484,
+        "clarification": true,
+        "clarification_text": "The available drawing shapes cannot faithfully show a transistor, resistor, and wired low-side circuit; a symbolic object diagram could misrepresent the circuit.",
+        "wall_ms": 6485
+      }
+    },
+    {
+      "id": "blue-sky",
+      "response": "{\"v\":1,\"mode\":\"clarify\",\"text\":\"The available drawing shapes cannot honestly show air molecules scattering sunlight without depicting clouds or implying the air itself is blue. An accurate visual needs a way to depict the scattering medium and scattered light.\"}",
+      "response_sha256": "111df4117695ee22b943ffbbbb17e3683e7b4e05b85030efb60d50761e2e4c8e",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 8237,
+          "first_text_ms": 8163,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2810,
+            "output": 493,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 8246,
+        "clarification": true,
+        "clarification_text": "The available drawing shapes cannot honestly show air molecules scattering sunlight without depicting clouds or implying the air itself is blue. An accurate visual needs a way to depict the scattering medium and scattered light.",
+        "wall_ms": 8248
+      }
+    },
+    {
+      "id": "bayes",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Learners studying test accuracy\",\"template\":\"solve\",\"question\":\"A condition affects 10 of 100 people. A test catches 8 of those 10 and falsely flags 9 of the other 90. Use a 2 by 2 count grid to explain the chance a positive person has the condition.\",\"acts\":[{\"id\":\"grid\",\"beat\":\"Organize the population into condition and test-result counts\"},{\"id\":\"chance\",\"beat\":\"Compare true positives with all positive results\"}],\"panels\":[{\"id\":\"p1\",\"act\":\"grid\",\"title\":\"Fill the count grid\",\"question\":\"How many people fall into each group?\",\"new_idea\":\"The four counts follow from the condition rate, catches, missed cases, and false flags.\",\"visual_kind\":\"2 by 2 count grid\",\"caption\":\"The grid separates condition status from test result.\",\"base\":null},{\"id\":\"p2\",\"act\":\"chance\",\"title\":\"Count positive results\",\"question\":\"Among positive people, how many have the condition?\",\"new_idea\":\"There are 8 true positives among 17 total positive results.\",\"visual_kind\":\"highlight positive-count comparison\",\"caption\":\"So a positive result means an 8-in-17 chance, about 47%.\",\"base\":\"p1\"}],\"takeaway\":\"Of 17 people who test positive, 8 have the condition: 8/17, about 47%.\"},\"panels\":{\"p1\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p1\",\"items\":[{\"id\":\"g\",\"type\":\"axes\",\"x\":[0,2],\"y\":[0,2],\"aspect\":\"equal\"},{\"id\":\"c1\",\"type\":\"rect\",\"in\":\"g\",\"x\":[0,1],\"y\":[1,2]},{\"id\":\"c2\",\"type\":\"rect\",\"in\":\"g\",\"x\":[1,2],\"y\":[1,2]},{\"id\":\"c3\",\"type\":\"rect\",\"in\":\"g\",\"x\":[0,1],\"y\":[0,1]},{\"id\":\"c4\",\"type\":\"rect\",\"in\":\"g\",\"x\":[1,2],\"y\":[0,1]},{\"id\":\"l1\",\"type\":\"label\",\"to\":\"c1\",\"text\":\"8 condition +\",\"side\":\"auto\"},{\"id\":\"l2\",\"type\":\"label\",\"to\":\"c2\",\"text\":\"2 condition −\",\"side\":\"auto\"},{\"id\":\"l3\",\"type\":\"label\",\"to\":\"c3\",\"text\":\"9 condition +\",\"side\":\"auto\"},{\"id\":\"l4\",\"type\":\"label\",\"to\":\"c4\",\"text\":\"81 condition −\",\"side\":\"auto\"},{\"id\":\"xl\",\"type\":\"label\",\"to\":\"g\",\"text\":\"Condition status\",\"side\":\"bottom\"},{\"id\":\"yl\",\"type\":\"label\",\"to\":\"g\",\"text\":\"Test result\",\"side\":\"left\"}]},\"p2\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p2\",\"items\":[{\"id\":\"p8\",\"type\":\"label\",\"to\":\"c1\",\"text\":\"8 true positives\",\"side\":\"auto\"},{\"id\":\"p9\",\"type\":\"label\",\"to\":\"c3\",\"text\":\"9 false positives\",\"side\":\"auto\"}]}}}",
+      "response_sha256": "1607316605ed0c1b1425e5a7a21f5af9816340017b4a05cffefbd6732bfe9965",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 12442,
+          "first_text_ms": 8103,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2838,
+            "output": 1110,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 12450,
+        "failed_phase": "whole-lesson",
+        "error": "invalid semantic reply: panel requires more than 64 strokes before label placement",
+        "error_type": "SemanticError",
+        "wall_ms": 12474
+      }
+    },
+    {
+      "id": "water-cycle",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"General learners\",\"template\":\"explain_concept\",\"question\":\"Explain how sunlight drives evaporation, condensation and precipitation in the water cycle.\",\"acts\":[{\"id\":\"cycle\",\"beat\":\"Trace the sun-powered water cycle\"}],\"panels\":[{\"id\":\"p1\",\"act\":\"cycle\",\"title\":\"Sun and water\",\"question\":\"What starts the cycle?\",\"new_idea\":\"Sunlight and surface water are the starting point.\",\"visual_kind\":\"Symbolic sun and water setup\",\"caption\":\"Sunlight shines on water at Earth’s surface.\",\"base\":null},{\"id\":\"p2\",\"act\":\"cycle\",\"title\":\"Evaporation\",\"question\":\"How does sunlight move water upward?\",\"new_idea\":\"Sunlight supplies energy that helps liquid water evaporate.\",\"visual_kind\":\"Sun-to-water connection\",\"caption\":\"Solar energy helps liquid water evaporate into invisible water vapor.\",\"base\":\"p1\"},{\"id\":\"p3\",\"act\":\"cycle\",\"title\":\"Condensation\",\"question\":\"How do clouds form?\",\"new_idea\":\"As water vapor rises and cools, it condenses into cloud droplets.\",\"visual_kind\":\"Cloud and condensation link\",\"caption\":\"Cooling vapor condenses into tiny droplets that form clouds.\",\"base\":\"p2\"},{\"id\":\"p4\",\"act\":\"cycle\",\"title\":\"Precipitation\",\"question\":\"How does water return?\",\"new_idea\":\"Droplets can grow and fall from clouds as precipitation, returning water to the surface.\",\"visual_kind\":\"Cloud-to-water cycle link\",\"caption\":\"When droplets grow heavy, precipitation returns water to the surface.\",\"base\":\"p3\"}],\"takeaway\":\"Sunlight supplies energy for evaporation; cooling allows condensation, and precipitation returns water to Earth’s surface.\"},\"panels\":{\"p1\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p1\",\"items\":[{\"id\":\"sun\",\"type\":\"object\",\"shape\":\"sun\",\"position\":\"top-left\"},{\"id\":\"water\",\"type\":\"object\",\"shape\":\"water\",\"position\":\"bottom-center\"}]},\"p2\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p2\",\"items\":[{\"id\":\"heat-link\",\"type\":\"connect\",\"from\":\"sun\",\"to\":\"water\"}]},\"p3\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p3\",\"items\":[{\"id\":\"cloud\",\"type\":\"object\",\"shape\":\"cloud\",\"position\":\"top-right\"},{\"id\":\"vapor-link\",\"type\":\"connect\",\"from\":\"water\",\"to\":\"cloud\"}]},\"p4\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p4\",\"items\":[{\"id\":\"rain-link\",\"type\":\"connect\",\"from\":\"cloud\",\"to\":\"water\"}]}}}",
+      "response_sha256": "5c4194eea9d43593ff0bd0c616c6d68916f2fa32b8349857247334454d53eb83",
+      "result": {
+        "valid": true,
+        "native_preparation_valid": true,
+        "first_pass_valid": true,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 10555,
+          "first_text_ms": 8421,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2802,
+            "output": 772,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 10564,
+        "preparation_ms": 10620,
+        "delivery_points": 913,
+        "snapshot_points": 2387,
+        "picture_runs": 1,
+        "preview_ms": 46,
+        "wall_ms": 10665
+      }
+    },
+    {
+      "id": "pythagoras",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Students learning the Pythagorean theorem\",\"template\":\"explain_concept\",\"question\":\"Use a right triangle with legs 3 and 4 and squares on its sides to explain why the hypotenuse is 5; distinguish this example from a general proof.\",\"acts\":[{\"id\":\"draw-triangle\",\"beat\":\"Set up the right triangle and identify its side lengths.\"},{\"id\":\"compare-squares\",\"beat\":\"Show the squares on each side and compare their areas.\"},{\"id\":\"qualify\",\"beat\":\"Explain what this example shows and what it does not prove.\"}],\"panels\":[{\"id\":\"p-triangle\",\"act\":\"draw-triangle\",\"title\":\"A right triangle\",\"question\":\"Which sides have lengths 3, 4, and the hypotenuse?\",\"new_idea\":\"A right triangle with legs 3 and 4 has a hypotenuse of length 5 in this example.\",\"visual_kind\":\"scaled right triangle with labeled sides\",\"caption\":\"The legs are 3 and 4; the hypotenuse measures 5.\",\"base\":null},{\"id\":\"p-squares\",\"act\":\"compare-squares\",\"title\":\"Squares on the sides\",\"question\":\"How do the three square areas compare?\",\"new_idea\":\"The squares on the legs have areas 9 and 16, while the square on the hypotenuse has area 25.\",\"visual_kind\":\"triangle with an external square on each side\",\"caption\":\"Their areas are 9 and 16 on the legs, and 25 on the hypotenuse.\",\"base\":\"p-triangle\"},{\"id\":\"p-takeaway\",\"act\":\"qualify\",\"title\":\"One example, not a proof\",\"question\":\"What does this example establish about the general rule?\",\"new_idea\":\"Since 9 + 16 = 25, this triangle illustrates the Pythagorean relationship but does not prove it for every right triangle.\",\"visual_kind\":\"same squares with area labels compared\",\"caption\":\"This confirms one case, not the theorem for every right triangle.\",\"base\":\"p-squares\"}],\"takeaway\":\"For this triangle, 3² + 4² = 5², so its hypotenuse is 5. This example illustrates the relationship; a general proof must establish it for all right triangles.\"},\"panels\":{\"p-triangle\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p-triangle\",\"items\":[{\"id\":\"frame\",\"type\":\"axes\",\"x\":[-3.5,7.5],\"y\":[-4.5,7.5],\"aspect\":\"equal\"},{\"id\":\"tri\",\"type\":\"polyline\",\"in\":\"frame\",\"points\":[[0,0],[4,0],[0,3],[0,0]]},{\"id\":\"leg3\",\"type\":\"label\",\"to\":\"tri\",\"text\":\"leg 3\",\"side\":\"left\"},{\"id\":\"leg4\",\"type\":\"label\",\"to\":\"tri\",\"text\":\"leg 4\",\"side\":\"bottom\"},{\"id\":\"hyp5\",\"type\":\"label\",\"to\":\"tri\",\"text\":\"hypotenuse 5\",\"side\":\"top\"}]},\"p-squares\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p-squares\",\"items\":[{\"id\":\"sq4\",\"type\":\"polyline\",\"in\":\"frame\",\"points\":[[0,0],[4,0],[4,-4],[0,-4],[0,0]]},{\"id\":\"sq3\",\"type\":\"polyline\",\"in\":\"frame\",\"points\":[[0,0],[0,3],[-3,3],[-3,0],[0,0]]},{\"id\":\"sq5\",\"type\":\"polyline\",\"in\":\"frame\",\"points\":[[4,0],[0,3],[3,7],[7,4],[4,0]]}]},\"p-takeaway\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p-takeaway\",\"items\":[{\"id\":\"area4\",\"type\":\"label\",\"to\":\"sq4\",\"text\":\"area 16\",\"side\":\"bottom\"},{\"id\":\"area3\",\"type\":\"label\",\"to\":\"sq3\",\"text\":\"area 9\",\"side\":\"left\"},{\"id\":\"area5\",\"type\":\"label\",\"to\":\"sq5\",\"text\":\"area 25\",\"side\":\"top\"}]}}}",
+      "response_sha256": "76314e0a3d8547578eec837a309e252ada3d48b4143e0dc69fffddd6c199161c",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 11419,
+          "first_text_ms": 7136,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2823,
+            "output": 1251,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 11424,
+        "failed_phase": "whole-lesson",
+        "error": "invalid semantic reply: panel caption exceeds twelve whitespace-delimited words",
+        "error_type": "SemanticError",
+        "wall_ms": 11426
+      }
+    },
+    {
+      "id": "sensor-alarm",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"General learners\",\"template\":\"explain_concept\",\"question\":\"Explain visually how two different sensors can both trigger the same alarm, and why hearing the alarm alone does not identify which sensor triggered it.\",\"acts\":[{\"id\":\"routes\",\"beat\":\"Introduce two distinct sensors and one shared alarm, then show both trigger paths.\"}],\"panels\":[{\"id\":\"setup\",\"act\":\"routes\",\"title\":\"One shared alarm\",\"question\":\"What devices are involved?\",\"new_idea\":\"Two different sensors and one alarm are shown separately.\",\"visual_kind\":\"Three labeled devices\",\"caption\":\"Two different sensors can feed one shared alarm.\",\"base\":null},{\"id\":\"paths\",\"act\":\"routes\",\"title\":\"Same signal\",\"question\":\"Can either sensor trigger the alarm?\",\"new_idea\":\"Both sensors connect to the same alarm, leaving two possible sources.\",\"visual_kind\":\"Two routes to one alarm\",\"caption\":\"Hearing the alarm alone cannot tell which sensor triggered it.\",\"base\":\"setup\"}],\"takeaway\":\"When either of two sensors can trigger the same alarm, hearing it does not identify the source.\"},\"panels\":{\"setup\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"setup\",\"items\":[{\"id\":\"s1\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"top-left\"},{\"id\":\"s2\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"bottom-left\"},{\"id\":\"alarm\",\"type\":\"object\",\"shape\":\"sun\",\"position\":\"top-right\"},{\"id\":\"l1\",\"type\":\"label\",\"to\":\"s1\",\"text\":\"Sensor A\",\"side\":\"left\"},{\"id\":\"l2\",\"type\":\"label\",\"to\":\"s2\",\"text\":\"Sensor B\",\"side\":\"left\"},{\"id\":\"la\",\"type\":\"label\",\"to\":\"alarm\",\"text\":\"Alarm\",\"side\":\"right\"}]},\"paths\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"paths\",\"items\":[{\"id\":\"c1\",\"type\":\"connect\",\"from\":\"s1\",\"to\":\"alarm\"},{\"id\":\"c2\",\"type\":\"connect\",\"from\":\"s2\",\"to\":\"alarm\"}]}}}",
+      "response_sha256": "fe3a4be2d576d174999b881a2737a2064c354e7d865599d84728847b5c27a65f",
+      "result": {
+        "valid": true,
+        "native_preparation_valid": true,
+        "first_pass_valid": true,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 8362,
+          "first_text_ms": 7543,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2815,
+            "output": 634,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 8369,
+        "preparation_ms": 8545,
+        "delivery_points": 1284,
+        "snapshot_points": 2147,
+        "picture_runs": 1,
+        "preview_ms": 89,
+        "wall_ms": 8634
+      }
+    },
+    {
+      "id": "proof-dependency",
+      "response": "{\"v\":1,\"mode\":\"story-lesson\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"Learners studying mathematical proofs\",\"template\":\"explain_concept\",\"question\":\"Explain visually how two lemmas can together support a theorem, and why proving only one lemma is not enough.\",\"acts\":[{\"id\":\"proof-chain\",\"beat\":\"Show a theorem needs support from both lemmas.\"}],\"panels\":[{\"id\":\"goal\",\"act\":\"proof-chain\",\"title\":\"The goal\",\"question\":\"What are the lemmas supporting?\",\"new_idea\":\"Introduce the theorem as the result to be established.\",\"visual_kind\":\"theorem goal node\",\"caption\":\"A theorem is the result we want to justify.\",\"base\":null},{\"id\":\"one\",\"act\":\"proof-chain\",\"title\":\"One lemma\",\"question\":\"Does one lemma complete the support?\",\"new_idea\":\"Add one supporting lemma and show that the second support is still absent.\",\"visual_kind\":\"partial proof support\",\"caption\":\"Lemma 1 helps, but Lemma 2's support is still missing.\",\"base\":\"goal\"},{\"id\":\"both\",\"act\":\"proof-chain\",\"title\":\"Both lemmas\",\"question\":\"How do the two lemmas support the theorem together?\",\"new_idea\":\"Add the second lemma and its link; the two supports now meet at the theorem.\",\"visual_kind\":\"combined proof support\",\"caption\":\"Together, both lemmas support the theorem, assuming their links are proved.\",\"base\":\"one\"}],\"takeaway\":\"Proving only one lemma leaves the other required support unestablished; the theorem is supported only when both lemmas and their connections are proved.\"},\"panels\":[{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"goal\",\"items\":[{\"id\":\"thm\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"top-center\"},{\"id\":\"thm-label\",\"type\":\"label\",\"to\":\"thm\",\"text\":\"Theorem\",\"side\":\"top\"}]},{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"one\",\"items\":[{\"id\":\"lem1\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"bottom-left\"},{\"id\":\"lem1-label\",\"type\":\"label\",\"to\":\"lem1\",\"text\":\"Lemma 1\",\"side\":\"bottom\"},{\"id\":\"link1\",\"type\":\"connect\",\"from\":\"lem1\",\"to\":\"thm\"}]},{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"both\",\"items\":[{\"id\":\"lem2\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"bottom-right\"},{\"id\":\"lem2-label\",\"type\":\"label\",\"to\":\"lem2\",\"text\":\"Lemma 2\",\"side\":\"bottom\"},{\"id\":\"link2\",\"type\":\"connect\",\"from\":\"lem2\",\"to\":\"thm\"}]}]}",
+      "response_sha256": "dd42127bb9b61a7556f0b0142833659365d0e72cb124e5aad9a5b8748cad3c00",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 10886,
+          "first_text_ms": 8110,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2810,
+            "output": 785,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 10891,
+        "failed_phase": "whole-lesson",
+        "error": "invalid semantic reply: provide exactly one typed-shape draft for every story panel",
+        "error_type": "SemanticError",
+        "wall_ms": 10897
+      }
+    },
+    {
+      "id": "dependency-failure",
+      "response": "{\"v\":1,\"mode\":\"story\",\"story\":{\"v\":1,\"mode\":\"story\",\"audience\":\"General audience\",\"template\":\"explain_concept\",\"question\":\"Explain visually why a service that needs both a database and a network connection fails if either dependency is unavailable.\",\"acts\":[{\"id\":\"setup\",\"beat\":\"Establish the service and its two required dependencies.\"},{\"id\":\"cases\",\"beat\":\"Show that losing either dependency leaves a requirement unmet.\"}],\"panels\":[{\"id\":\"p1\",\"act\":\"setup\",\"title\":\"The service\",\"question\":\"What needs the dependencies?\",\"new_idea\":\"Introduce the service.\",\"visual_kind\":\"symbolic service object\",\"caption\":\"The service is the system that must work.\",\"base\":null},{\"id\":\"p2\",\"act\":\"setup\",\"title\":\"Two requirements\",\"question\":\"What does the service need?\",\"new_idea\":\"Show both required dependencies connected to the service.\",\"visual_kind\":\"symbolic dependency connections\",\"caption\":\"It depends on both the database and network.\",\"base\":\"p1\"},{\"id\":\"p3\",\"act\":\"cases\",\"title\":\"No database\",\"question\":\"What if the database is unavailable?\",\"new_idea\":\"Show the network available while the database is absent.\",\"visual_kind\":\"symbolic missing-dependency case\",\"caption\":\"Without the database, one required dependency is missing.\",\"base\":\"p1\"},{\"id\":\"p4\",\"act\":\"cases\",\"title\":\"No network\",\"question\":\"What if the network is unavailable?\",\"new_idea\":\"Show the database available while the network is absent.\",\"visual_kind\":\"symbolic missing-dependency case\",\"caption\":\"Without the network, the other required dependency is missing.\",\"base\":\"p1\"}],\"takeaway\":\"Because the service requires both dependencies, either one being unavailable leaves a requirement unmet and the service fails.\"},\"panels\":{\"p1\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p1\",\"items\":[{\"id\":\"service\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"bottom-center\"},{\"id\":\"service-label\",\"type\":\"label\",\"to\":\"service\",\"text\":\"Service\",\"side\":\"bottom\"}]},\"p2\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p2\",\"items\":[{\"id\":\"db\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"top-left\"},{\"id\":\"net\",\"type\":\"object\",\"shape\":\"cloud\",\"position\":\"top-right\"},{\"id\":\"db-label\",\"type\":\"label\",\"to\":\"db\",\"text\":\"Database\",\"side\":\"top\"},{\"id\":\"net-label\",\"type\":\"label\",\"to\":\"net\",\"text\":\"Network\",\"side\":\"top\"},{\"id\":\"needs-db\",\"type\":\"connect\",\"from\":\"service\",\"to\":\"db\"},{\"id\":\"needs-net\",\"type\":\"connect\",\"from\":\"service\",\"to\":\"net\"}]},\"p3\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p3\",\"items\":[{\"id\":\"net-case\",\"type\":\"object\",\"shape\":\"cloud\",\"position\":\"top-right\"},{\"id\":\"net-case-label\",\"type\":\"label\",\"to\":\"net-case\",\"text\":\"Available\",\"side\":\"top\"},{\"id\":\"net-case-link\",\"type\":\"connect\",\"from\":\"service\",\"to\":\"net-case\"}]},\"p4\":{\"v\":1,\"mode\":\"panel-shapes\",\"panel\":\"p4\",\"items\":[{\"id\":\"db-case\",\"type\":\"object\",\"shape\":\"box\",\"position\":\"top-left\"},{\"id\":\"db-case-label\",\"type\":\"label\",\"to\":\"db-case\",\"text\":\"Available\",\"side\":\"top\"},{\"id\":\"db-case-link\",\"type\":\"connect\",\"from\":\"service\",\"to\":\"db-case\"}]}}}",
+      "response_sha256": "74e88d9856c73273e5b8eee6b4fca51c591c78fe99087acb140e0e650f78d6e6",
+      "result": {
+        "valid": false,
+        "native_preparation_valid": false,
+        "first_pass_valid": false,
+        "tablet_proven": false,
+        "quality_status": "unreviewed",
+        "call_attempts": 1,
+        "completed_model_responses": 1,
+        "retries": 0,
+        "expected_model": "gpt-6-luna",
+        "intended_prompt_sha256": "2e94ec7974801d83f880e3108022e384725af0062417bb42f7bfd74b7b978bd4",
+        "host_prompt_attested": false,
+        "deadline_ms": 30000,
+        "metrics": {
+          "elapsed_ms": 12713,
+          "first_text_ms": 9236,
+          "provider": "openai-codex",
+          "model": "gpt-6-luna",
+          "reasoning_requested": "minimal",
+          "requested_output_tokens": 2400,
+          "usage": {
+            "input": 2809,
+            "output": 1129,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        "model_wall_ms": 12723,
+        "failed_phase": "whole-lesson",
+        "error": "use lesson, story-lesson, answer, or clarify",
+        "error_type": "SemanticError",
+        "wall_ms": 12723
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "tablet_proven": false,
+  "handwriting_proven": false,
+  "source_retrieval_proven": false,
+  "conditions": "One fresh attempt per question, 30-second capacity diagnostic. Not directly comparable to earlier15-second runs; no repair, retries, fallback or live changes.",
+  "ordinary": {
+    "attempted": 14,
+    "raw_replies": 14,
+    "visual_lessons": 12,
+    "text_only": 0,
+    "deadlines": 0,
+    "replies_after_previous_15s_cutoff": 2,
+    "median_completed_reply_ms": 10075.175500000001,
+    "median_first_text_ms": 2565.0,
+    "output_tokens": 4609,
+    "failures": [
+      {
+        "id": "inverse-mapping",
+        "error": "no clear connector route; simplify the scene"
+      },
+      {
+        "id": "sensor-alarm",
+        "error": "step needs bounded object/connection IDs"
+      }
+    ],
+    "per_question": [
+      {
+        "id": "integral",
+        "reply_ms": 8341.66,
+        "raw": true
+      },
+      {
+        "id": "gravity",
+        "reply_ms": 9515.267,
+        "raw": true
+      },
+      {
+        "id": "odd-squares",
+        "reply_ms": 11428.122,
+        "raw": true
+      },
+      {
+        "id": "compound-interest",
+        "reply_ms": 15913.45,
+        "raw": true
+      },
+      {
+        "id": "transistor",
+        "reply_ms": 22606.877,
+        "raw": true
+      },
+      {
+        "id": "blue-sky",
+        "reply_ms": 14071.591,
+        "raw": true
+      },
+      {
+        "id": "bayes",
+        "reply_ms": 6241.977,
+        "raw": true
+      },
+      {
+        "id": "fractions",
+        "reply_ms": 6964.452,
+        "raw": true
+      },
+      {
+        "id": "water-cycle",
+        "reply_ms": 11432.507,
+        "raw": true
+      },
+      {
+        "id": "pythagoras",
+        "reply_ms": 9297.399,
+        "raw": true
+      },
+      {
+        "id": "inverse-mapping",
+        "reply_ms": 10635.084,
+        "raw": true
+      },
+      {
+        "id": "sensor-alarm",
+        "reply_ms": 7698.407,
+        "raw": true
+      },
+      {
+        "id": "proof-dependency",
+        "reply_ms": 12668.501,
+        "raw": true
+      },
+      {
+        "id": "dependency-failure",
+        "reply_ms": 6858.464,
+        "raw": true
+      }
+    ]
+  },
+  "research": {
+    "attempted": 3,
+    "raw_replies": 3,
+    "visual_lessons": 1,
+    "text_only": 0,
+    "deadlines": 0,
+    "replies_after_previous_15s_cutoff": 3,
+    "median_completed_reply_ms": 26102.567,
+    "median_first_text_ms": 12529,
+    "output_tokens": 1756,
+    "failures": [
+      {
+        "id": "aperiodic-hierarchy",
+        "error": "missing or excessive lesson text"
+      },
+      {
+        "id": "langlands-correspondence",
+        "error": "storyboard stage exceeds the native pen budget"
+      }
+    ],
+    "per_question": [
+      {
+        "id": "aperiodic-hierarchy",
+        "reply_ms": 20871.124,
+        "raw": true
+      },
+      {
+        "id": "kakeya-dimension",
+        "reply_ms": 27002.64,
+        "raw": true
+      },
+      {
+        "id": "langlands-correspondence",
+        "reply_ms": 26102.567,
+        "raw": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "status": "frozen_before_candidate_model_calls",
+  "experiment": "single_pass_evidence_first_teaching_preamble",
+  "changed": ["system prompt teaching preamble only"],
+  "unchanged": ["question image bytes", "question text", "question context", "question order", "rendering vocabulary", "schema", "worked examples", "renderer", "model", "reasoning", "output token cap", "deadline"],
+  "model": "openai-codex/gpt-5.6-luna",
+  "reasoning": "minimal",
+  "output_tokens_requested": 2400,
+  "deadline_ms": 15000,
+  "attempts_per_question": 1,
+  "repair_allowed": false,
+  "tablet_proven": false,
+  "candidate_system_prompt_sha256": "8eae456c2923da71b096fbf3673b2d12225167665a10be71a1247cb831511761",
+  "ordinary_packet_sha256": "95161562bc376498c229ec9444e5c66df3c37ce5689d2c2869b3174ab7816dfc",
+  "research_packet_sha256": "76ef5e6dbdddb3e431aa01e388b1e5314b89cde9dac389e27d9595f1545c1a1e",
+  "criteria": [
+    {"id": "correctness", "question": "Does the answer address the actual question and preserve its mathematical/scientific assumptions?", "fatal": true},
+    {"id": "visible_reason", "question": "Do the new marks actually demonstrate the caption's relationship or construction, rather than merely name technical concepts?", "fatal": true},
+    {"id": "scope", "question": "Are schematic analogies, finite examples, cited claims and general proofs distinguished accurately?", "fatal": true},
+    {"id": "progression", "question": "Does each caption precede exactly its corresponding addition, with the complete intended picture revealed once?", "fatal": true},
+    {"id": "readability", "question": "Are labels readable and associated clearly with their objects/relationships, without overlaps or gratuitous detours?", "fatal": true},
+    {"id": "economy", "question": "Do labels name essentials while captions carry reasoning, avoiding redundant ink and decorative scaffolding?", "fatal": false}
+  ],
+  "review_policy": "Compiler/native validity is an independent gate, not a teaching score. Mark each criterion pass, fail or unreviewed with specific evidence. Do not count text fallbacks as visual lessons. Retain first failures and compare all questions, including timeouts. A small single-pass sample cannot establish production reliability.",
+  "latency_policy": "Report first text, completed reply, output tokens, compilation and first renderable lesson separately; no tablet-latency claims from offline timings.",
+  "source_policy": "Research question briefs and existing review rubrics are unchanged. Evaluator-supplied briefs do not prove autonomous retrieval. Review criteria are not sent to the model."
+}

@@ -1,0 +1,4 @@
+output/
+__pycache__/
+.notebook-auth.json
+.notebook-lessons.json

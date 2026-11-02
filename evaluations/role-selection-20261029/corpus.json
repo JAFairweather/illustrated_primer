@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "status": "inputs_only_not_model_results",
+  "audience": "High-school student; explain unfamiliar terms before using them.",
+  "questions": [
+    {"id":"integral","question":"Explain the definite integral of x squared from 0 to 1 using an area picture and compute it.","source_ids":[],"review_checks":["Exact value is 1/3.","Finite rectangles are approximations, not the integral itself.","The picture explains accumulation rather than merely displaying the answer."]},
+    {"id":"gravity","question":"Why does an apple dropped from rest fall farther in each equal time interval? Ignore air resistance.","source_ids":[],"review_checks":["Constant acceleration near Earth's surface; displacement from rest is proportional to elapsed time squared.","Equal-time distances grow; acceleration is not confused with speed."]},
+    {"id":"odd-squares","question":"Show why the sum of the first n odd numbers equals n squared, not just a few numerical examples.","source_ids":[],"review_checks":["The new border adds 2n-1 cells to the (n-1) square to make the n square.","A numerical example supports, but does not replace, the general argument."]},
+    {"id":"compound-interest","question":"Compare $100 growing at 10% per year with $100 gaining $10 per year over three years.","source_ids":[],"review_checks":["Annual compounding gives 100,110,121,133.10; fixed additions give 100,110,120,130.","Each label clearly belongs to its own series."]},
+    {"id":"transistor","question":"Explain how an NPN transistor can switch a lamp in a simple low-side circuit, with a base resistor.","source_ids":[],"review_checks":["Lamp is between positive supply and collector; emitter returns to common ground.","The base resistor limits base current; the explanation does not imply the control signal supplies the lamp's full power.","A schematic must have actual connected terminals, not a decorative box-arrow chain."]},
+    {"id":"blue-sky","question":"Why is the daytime sky blue? Show sunlight, air scattering and the observer without implying air is blue paint.","source_ids":[],"review_checks":["Short visible wavelengths scatter more strongly than long ones.","The observer receives scattered light from air, with a connected incoming and outgoing light path.","Black-ink labels can represent wavelengths; neither blue pigment nor blue ink is required."]},
+    {"id":"bayes","question":"A condition affects 10 of 100 people. A test catches 8 of those 10 and falsely flags 9 of the other 90. Use a 2 by 2 count grid to explain the chance a positive person has the condition.","source_ids":[],"review_checks":["The four counts are 8,2,9,81 with unambiguous row and column meanings.","Among 17 positives, 8 have the condition: 8/17, about 47%.","Do not confuse sensitivity 8/10 with the requested posterior 8/17."]},
+    {"id":"fractions","question":"Show visually why one half and two fourths represent the same amount.","source_ids":[],"review_checks":["Both comparisons refer to equal-sized wholes.","Subdivision changes the count of parts, not the represented amount."]},
+    {"id":"water-cycle","question":"Explain how sunlight drives evaporation, condensation and precipitation in the water cycle.","source_ids":[],"review_checks":["Solar energy drives evaporation; cooling vapor condenses, and water returns as precipitation.","Arrows have intelligible destinations and do not imply the sun creates water."]},
+    {"id":"pythagoras","question":"Use a right triangle with legs 3 and 4 and squares on its sides to explain why the hypotenuse is 5; distinguish this example from a general proof.","source_ids":[],"review_checks":["Square areas are 9,16,25; side lengths are 3,4,5.","Right angle and corresponding attached squares are recognizable.","The example does not pretend to prove the theorem for every right triangle."]},
+    {"id":"riemann-seven-eighths","question":"Explain the recent claimed Riemann 7/8 result visually to a high-school student: what is zeta, why do its zeros matter, what was known, what is claimed now, and what remains open?","source_ids":["riemann-primary","formalization-scope","companion","claim-status"],"review_checks":["Introduce primes and the zeta connection before the complex-plane picture.","The Riemann hypothesis concerns nontrivial zeros at real part 1/2, not all zeros.","Mark the September 30 result as an unreviewed claim on the relevant panel, not only in a footnote.","The claimed zero-free side is strictly to the RIGHT of 7/8, at every height; a finite display must not imply a finite-height theorem.","Do not assert that the boundary 7/8 is itself zero-free, that the pole at 1 is a zero, or that RH has been proved.","Distinguish fixed width from a narrowing classical region; drawings of zeros are illustrative, not measured data.","Preserve a recognizable home picture and explain the remaining gap to 1/2.","Do not assert that every application in the paper is Lean-verified."]}
+  ],
+  "sources": [
+    {
+      "id":"riemann-primary",
+      "title":"The Quasi-Riemann Hypothesis: A Zero-Free Half-Plane Re(s)>7/8",
+      "canonical_url":"https://github.com/openai/math/blob/main/preprints/The-Quasi-Riemann-Hypothesis-September-30-2026/paper.pdf",
+      "accessed_url":"https://www.emergentmind.com/openai-math-explorer/papers/5.pdf?v=adc7f12",
+      "checked_on":"2026-10-29",
+      "checked_sections":"Title, abstract and opening introduction, pages 1 and 4 of the mirrored primary manuscript; not an audit of the proof.",
+      "facts":["The manuscript is dated September 30, 2026 and claims no zeros where Re(s)>7/8 for all Dirichlet L-functions, including zeta, and finite-order Hecke L-functions over Q(sqrt(-3)); a principal pole at 1 is allowed.","The bound is independent of imaginary height and conductor.","The introductory series and Euler product are defined for Re(s)>1 and then continued meromorphically; do not depict the original series as converging throughout the critical strip."]
+    },
+    {
+      "id":"formalization-scope",
+      "title":"OpenAI math repository: result 003 formalization scope",
+      "canonical_url":"https://github.com/openai/math/blob/main/lean/docs/003.md",
+      "accessed_url":"https://raw.githubusercontent.com/openai/math/main/lean/docs/003.md",
+      "checked_on":"2026-10-29",
+      "checked_sections":"Complete short scope note; the Lean proof was not independently built or audited.",
+      "facts":["The repository reports formalization of the 7/8 bound for zeta and every Dirichlet L-function, and the specified finite-order Hecke family.","It excludes principal-character poles at 1 from those statements and explicitly excludes the paper's later applications from formalization coverage.","Its separate Landau-Siegel statement excludes a uniform near-one region, not every real zero between 0 and 1."]
+    },
+    {
+      "id":"companion",
+      "title":"The Quasi-Riemann Hypothesis, October 5 companion",
+      "canonical_url":"https://github.com/openai/math/blob/main/preprints/The-Quasi-Riemann-Hypothesis-October-5-2026/paper2.pdf",
+      "accessed_url":"https://www.emergentmind.com/openai-math-explorer/papers/6.pdf",
+      "checked_on":"2026-10-29",
+      "checked_sections":"Title, abstract and Theorem 1.1, pages 1-2; not a proof audit.",
+      "facts":["This separate 49-page paper is dated October 5 and claims the weaker zero-free half-plane Re(s)>11/12.","Do not cite this companion as the September 30 7/8 manuscript or present its bound as stronger."]
+    },
+    {
+      "id":"claim-status",
+      "title":"James's supplied goal and DJ Codex brief",
+      "canonical_url":null,
+      "accessed_url":null,
+      "checked_on":"2026-10-29",
+      "checked_sections":"User-supplied status requirement. No independent peer-review certification was obtained.",
+      "facts":["For this evaluation, present the new result as an unreviewed claim, not an established proof of RH.","Explain the significance of the claim without claiming to have checked its proof or Lean environment."]
+    }
+  ],
+  "rubric": {
+    "story":["correctness_and_scope","student_comprehension","explanatory_progression","takeaway"],
+    "picture":["caption_matches_addition","visible_argument","label_ownership_and_legibility","continuity_and_economy"],
+    "scale":{"0":"Incorrect or actively misleading.","1":"Major gaps prevent understanding.","2":"Useful but needs material revision.","3":"Clear and accurate, with minor defects.","4":"Especially clear, economical and compelling."},
+    "gate":"Each reviewed dimension must score at least 3, with no critical factual or visual contradiction. Missing evidence is unreviewed, never zero or a pass. Compiler/native validity is a separate gate.",
+    "evidence":"Every score needs a panel ID or an explicit whole-lesson reference and a concrete reason. Picture scores require the actual stage previews, not just shape JSON. Compare story and picture separately; do not average away a factual failure.",
+    "critic_calibration":"Before relying on a critic, test independently reviewed good and bad lessons, including reversed shading, wrong label ownership, a numerical example claimed as a proof, and a claimed result mislabeled as established. Hide producer identity, latency, cost and expected verdict; reverse pair order for position-bias checks. These calibration artifacts are not yet supplied by this corpus."
+  }
+}

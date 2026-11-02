@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""herd-board-scorecard [--no-judge] [REQUEST...]: grade Primer replies against the A targets in PRIMER_A_PLAN.md.
+
+With no REQUEST, grades the newest finished run of each benchmark topic (lever, raven, rainbow, ocean, cell division,
+Riemann, Slightly Stoopid, IRIS), found by keyword in the saved replies. Per run, from the trace and the saved reply:
+seconds to first ink and to written (first spoken word is first ink + ~1 s while Piper narrates on the R1), the
+answer model's time, picture time and ink points, and how the run ended. A Gemini judge then scores the lesson
+(1-5) on the rubric below, adapted from LearnLM's pedagogy rubric, and gives a letter grade. Reads the server's files only:
+nothing here touches the tablet, pidog or the R1. The judge's calls go in the shared Gemini ledger.
+Writes the full result to ~/.cache/herd-board/scorecards/<time>.json."""
+import json
+import os
+import statistics
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+TRACE = os.path.expanduser(os.environ.get('HERD_BOARD_TRACE', '~/Library/Logs/herd-board-trace.jsonl'))
+REPLIES = os.path.expanduser('~/.cache/herd-board/replies')
+OUT = os.path.expanduser('~/.cache/herd-board/scorecards')
+JAMES = f'{OUT}/james.json'  # James's own 1-5 grades, {"request" or "*": n}; they outrank the judge
+JUDGE = 'gemini-3.5-flash'
+# Most specific first: a run counts for one topic only.
+TOPICS = {'slightly stoopid': ['stoopid'], 'iris': ['iris software', 'jason'], 'riemann': ['riemann'],
+          'raven': ['raven'], 'lever': ['lever'], 'rainbow': ['rainbow'],
+          'cell division': ['mitosis', 'cell division', 'cells divide'], 'ocean': ['ocean']}
+TARGETS = {'first_word_s': 2, 'first_ink_s': 5, 'written_s': 60, 'score': 4}
+# Anchored to James's bar, not a generic tutor's: on 2026-10-31 he graded the replies this judge had scored 4.1 as 2/5.
+RUBRIC = """You grade one reply from a storytelling tutor that is meant to become the Young Lady's Illustrated Primer
+from The Diamond Age: it answers Nell's questions with a tale, a picture that builds as it is told, and characters
+she cares about, so that she learns without being lectured. Judge against that book, not against ordinary tutors.
+The reply is JSON: steps (each a caption the tutor writes and speaks, with drawing operations), a takeaway, maybe an
+equation. The opening "James, once upon a time..." is added outside this JSON, so do not mark it missing.
+Anchors for every score: 1 = fails; 2 = a correct textbook paragraph with a story pasted on (most AI tutors today);
+3 = a real story that teaches, but the picture or the characters do little; 4 = a story James would remember, where
+picture, plot and mechanism are one thing; 5 = indistinguishable from the Primer. Default to 2 and argue upward.
+- concept: the plot itself is the mechanism: what happens to the characters IS the cause and effect being taught.
+  Mark down beats that explain in narrator prose while the characters stand idle, and decorative details.
+- order: each beat needs the one before; the last beat lands the answer to what was actually asked.
+- accuracy: facts and claims are correct. Today is {today}: results newer than your training may be real, so mark
+  down only claims you know are wrong, and name any you doubt in weakest. Hedges and disclaimers that break the
+  story count against voice.
+- voice: spoken to James as a tale with wonder and concrete images; short sentences meant to be heard. Generic
+  phrasing, textbook or press-release prose, and a stock robot standing in for a character all mark down.
+- drawing: from the draw operations, would the picture alone show the mechanism, step by step, with each step adding
+  what its caption says (things in the right place, e.g. the rock under the lever, the push shown)? Many small
+  decorative strokes, or steps that only restate the scene, mark down.
+Also: question (true if it ends by asking James something to think about), grade (A-F for the whole reply), weakest
+(one short sentence on what most needs fixing). Reply with JSON only:
+{"concept":n,"order":n,"accuracy":n,"voice":n,"drawing":n,"question":bool,"grade":"X","weakest":"..."}"""
+
+
+def trace_runs():
+	runs = {}
+	try:
+		with open(TRACE) as stream:
+			for raw in stream:
+				try:
+					d = json.loads(raw)
+				except ValueError:
+					continue
+				r = runs.setdefault(d.get('request'), {'request': d.get('request'), 'stages': []})
+				r['stages'].append(d)
+	except FileNotFoundError:
+		pass
+	return runs
+
+
+def measure(run):
+	"""Timings (s) and outcome of one traced run."""
+	m = {'request': run['request'], 'pressed': None, 'end': None, 'reason': None, 'picture': None, 'picture_s': None,
+		 'points': 0, 'frames': None, 'facts': False, 'replay': False}
+	for d in run['stages']:
+		stage, outcome = d.get('stage'), d.get('outcome')
+		m['pressed'] = m['pressed'] or (d['t'] if stage == 'press' else None)
+		if stage == 'acknowledged':
+			m['end'] = 'acknowledged'
+			t = d.get('timing') or {}
+			for name, key in (('first_ink_s', 'write_started'), ('written_s', 'written'), ('reply_s', 'reply_ready'),
+							  ('first_text_s', 'model_first_text')):
+				if key in t:
+					m[name] = round(t[key]/1000, 1)
+		elif stage in ('held', 'cleared') and m['end'] != 'acknowledged':
+			m['end'], m['reason'] = stage, (d.get('reason') or outcome or '')[:120]
+		elif stage == 'picture' and outcome == 'ok':
+			m['picture_s'], m['frames'] = round(d.get('ms', 0)/1000, 1), d.get('frames')
+			m['replay'] = d.get('ms', 0) < 500  # every frame came from the cache: a replay, not a fresh run
+		elif stage == 'picture' and outcome in ('drawn', 'procedural', 'failed'):
+			m['picture'] = m['picture'] if outcome == 'failed' and m['picture'] else outcome
+			m['points'] = sum(s.get('points', 0) for s in d.get('stages', [])) or m['points']
+		elif stage == 'facts':
+			m['facts'] = outcome not in ('none', None)
+	if 'first_ink_s' in m:
+		m['first_word_s'] = round(m['first_ink_s']+1, 1)
+	return m
+
+
+def lesson(request):
+	try:
+		with open(f'{REPLIES}/{request}.json') as f:
+			envelope = json.load(f)
+		reply = json.loads(envelope['text'])
+	except (OSError, ValueError, KeyError):
+		return None, {}
+	return (reply if isinstance(reply, dict) else None), envelope.get('metrics') or {}
+
+
+def benchmark(runs):
+	"""The newest finished run (else the newest run) per topic, matched in the reply's intent."""
+	picked = {}
+	for run in sorted(runs.values(), key=lambda r: r['stages'][0]['t'], reverse=True):
+		reply, _ = lesson(run['request'])
+		if not reply or reply.get('mode') != 'lesson':
+			continue
+		words = str(reply.get('intent', '')).lower()  # the question restated; the story itself wanders (a hurricane's ocean)
+		m = measure(run)
+		if m['replay']:
+			continue
+		finished = m['end'] == 'acknowledged'
+		topic = next((t for t, keys in TOPICS.items() if any(k in words for k in keys)), None)
+		if topic and (topic not in picked or finished and not picked[topic][1]):
+			picked[topic] = (run['request'], finished)
+	return {topic: request for topic, (request, _) in picked.items()}
+
+
+def judge(reply, times=3):
+	"""The rubric, asked `times` times: one judging is noisy (the same lever reply scored 3.4 and then 4.0).
+	Scores are the median of each; grade and weakest come from the judging nearest the median score."""
+	scores = [judge_once(reply) for _ in range(times)]
+	score = {k: statistics.median(s[k] for s in scores) for k in ('concept', 'order', 'accuracy', 'voice', 'drawing', 'score')}
+	nearest = min(scores, key=lambda s: abs(s['score']-score['score']))
+	return {**nearest, **score, 'question': sum(bool(s.get('question')) for s in scores)*2 > times, 'spread':
+			round(max(s['score'] for s in scores)-min(s['score'] for s in scores), 1)}
+
+
+def judge_once(reply):
+	import notebook_image_model as gm
+	body = json.dumps({'contents': [{'role': 'user', 'parts': [{'text': RUBRIC.replace('{today}', time.strftime('%d %B %Y')) + '\n\nREPLY:\n' + json.dumps(reply)}]}],
+					   'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.2}}).encode()
+	d = gm._post(JUDGE, body, 60, name='herd-board-scorecard', held='hold-until')
+	parts = ((d.get('candidates') or [{}])[0].get('content') or {}).get('parts') or []
+	score = json.loads(''.join(p.get('text', '') for p in parts))
+	score['score'] = round(statistics.mean(score[k] for k in ('concept', 'order', 'accuracy', 'voice', 'drawing')), 1)
+	return score
+
+
+def main(argv):
+	judged = '--no-judge' not in argv
+	asked = [a for a in argv[1:] if not a.startswith('--')]
+	runs = trace_runs()
+	if asked:
+		chosen = {a[:17]: next((r for r in runs if r and r.startswith(a)), a) for a in asked}
+	else:
+		chosen = benchmark(runs)
+	try:
+		with open(JAMES) as f:
+			james = json.load(f)
+	except (OSError, ValueError):
+		james = {}
+	rows = []
+	for topic, request in chosen.items():
+		row = {'topic': topic, **measure(runs.get(request, {'request': request, 'stages': []}))}
+		reply, metrics = lesson(request)
+		row['james'] = james.get(request, james.get('*'))
+		row['model'], row['model_s'] = metrics.get('model'), round((metrics.get('elapsed_ms') or 0)/1000, 1)
+		if reply and judged:
+			try:
+				row.update(judge(reply))
+			except Exception as e:  # a judge failure must not hide the timings
+				row['judge_error'] = f'{type(e).__name__}: {e}'[:120]
+		rows.append(row)
+	print(f"{'topic':17} {'end':12} {'word':>5} {'ink':>5} {'done':>5} {'model':>6} {'picture':10} {'pict':>5} {'points':>6} "
+		  f"{'score':>5} {'james':>5} grade  weakest")
+	for r in rows:
+		f = lambda k: '-' if r.get(k) is None else f"{r[k]:g}"
+		print(f"{r['topic'][:17]:17} {(r['end'] or 'unfinished')[:12]:12} {f('first_word_s'):>5} {f('first_ink_s'):>5} "
+			  f"{f('written_s'):>5} {f('model_s'):>6} {(r['picture'] or 'none'):10} {f('picture_s'):>5} {r['points']:>6} {f('score'):>5} {f('james'):>5} "
+			  f"{r.get('grade', '-'):5}  {(r.get('weakest') or r.get('judge_error') or r.get('reason') or '')[:70]}")
+	done = [r for r in rows if r['end'] == 'acknowledged']
+	summary = {'runs': len(rows), 'finished': len(done)}
+	for k in ('first_word_s', 'first_ink_s', 'written_s', 'score', 'james'):
+		vals = [r[k] for r in rows if r.get(k) is not None]
+		if vals:
+			summary[k] = statistics.median(vals)
+	print('\nmedian ' + '  '.join(f"{k} {v:g} (A: {'≤' if k != 'score' else '≥'}{TARGETS[k]})" for k, v in summary.items()
+								  if k in TARGETS) + (f"  James {summary['james']:g}" if 'james' in summary else '') + f"  finished {summary['finished']}/{summary['runs']}")
+	os.makedirs(OUT, exist_ok=True)
+	path = f"{OUT}/{time.strftime('%Y%m%d-%H%M%S')}.json"
+	with open(path, 'w') as f:
+		json.dump({'summary': summary, 'targets': TARGETS, 'runs': rows}, f, indent=1)
+	print(path)
+	return 0
+
+
+if __name__ == '__main__':
+	sys.exit(main(sys.argv))

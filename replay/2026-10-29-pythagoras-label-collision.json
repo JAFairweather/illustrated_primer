@@ -1,0 +1,5 @@
+{
+ "response_format": "semantic-v1",
+ "text": "{\"v\": 1, \"mode\": \"lesson\", \"intent\": \"A 3-4-5 triangle example.\", \"scene\": {\"family\": \"drawing\"}, \"claims\": [], \"takeaway\": \"This is a numerical example, not a general proof.\", \"steps\": [{\"caption\": \"Draw a right triangle.\", \"draw\": [{\"op\": \"polyline\", \"points\": [[200, 220], [200, 130], [320, 220], [200, 220]]}, {\"op\": \"label\", \"at\": [185, 235], \"text\": \"right angle\", \"size\": 16}]}, {\"caption\": \"Add squares on its legs.\", \"draw\": [{\"op\": \"polyline\", \"points\": [[200, 130], [110, 130], [110, 220], [200, 220], [200, 130]]}, {\"op\": \"polyline\", \"points\": [[200, 220], [200, 340], [320, 340], [320, 220], [200, 220]]}, {\"op\": \"label\", \"at\": [125, 180], \"text\": \"3² = 9\", \"size\": 20}]}, {\"caption\": \"Mark the example.\", \"draw\": [{\"op\": \"label\", \"at\": [365, 150], \"text\": \"one example\", \"size\": 20}]}]}",
+ "note": "Offline Pythagoras failure: labels inside the square borders. Must reach the page with those labels left out."
+}

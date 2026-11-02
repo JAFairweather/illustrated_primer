@@ -1,0 +1,8 @@
+{
+	"name": "R1 Instruments",
+	"loadsBackend": false,
+	"entry": "/ui/instruments.qml",
+	"id": "r1-instruments",
+	"supportsScaling": false,
+	"canHaveMultipleFrontends": false
+}

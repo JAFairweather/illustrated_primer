@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""herd-board-trace [N]: the last N notebook requests (default 20), one line each: when it was pressed, the page, the
+last stage it passed, and why it stopped after it.
+herd-board-trace REQUEST: every line traced for one request (a prefix of its id is enough).
+Reads HERD_BOARD_TRACE (default ~/Library/Logs/herd-board-trace.jsonl), written by the server (notebook_trace.py)."""
+import json
+import os
+import sys
+
+TRACE = os.path.expanduser(os.environ.get('HERD_BOARD_TRACE', '~/Library/Logs/herd-board-trace.jsonl'))
+ORDER = ['press', 'page_read', 'new_ink', 'submitted', 'composed', 'rendered', 'placed', 'written', 'acknowledged']
+
+
+def lines():
+	try:
+		with open(TRACE) as stream:
+			for raw in stream:
+				try:
+					yield json.loads(raw)
+				except ValueError:
+					pass
+	except FileNotFoundError:
+		sys.exit(f'no trace yet at {TRACE}')
+
+
+def short(path):
+	if not path:
+		return '-'
+	doc, _, page = path.partition('/')
+	return doc[:8] + '/' + page[:8]
+
+
+def summary(n):
+	requests = {}
+	for e in lines():
+		if e.get('request'):
+			requests.setdefault(e['request'], []).append(e)
+	for request, events in list(requests.items())[-n:]:
+		path = next((e['path'] for e in events if e.get('path')), None)
+		reached = max((ORDER.index(e['stage']) for e in events if e['stage'] in ORDER and e['outcome'] == 'ok'), default=-1)
+		failed = [e for e in events if e['outcome'] not in ('ok', 'waiting', 'ready', 'writing', 'written', 'drawn', 'scrolled')]
+		if any(e['stage'] == 'acknowledged' and e['outcome'] == 'ok' for e in events):
+			where, why = 'acknowledged', 'answer on the page'
+		else:
+			where = ORDER[reached] if reached >= 0 else '-'
+			if failed:
+				last = failed[-1]
+				why = f"{last['stage']} {last['outcome']}: {last.get('reason') or last.get('code') or ''}".rstrip(': ')
+			else:
+				why = 'in progress (or stopped with no error)'
+		print(f"{events[0]['t'][5:19].replace('T', ' ')}  {request[9:17]}  {short(path):17}  "
+			f"{where:12}  {why[:110]}")
+
+
+def detail(prefix):
+	prefix = prefix.removeprefix('notebook-')
+	found = False
+	for e in lines():
+		if (e.get('request') or '').removeprefix('notebook-').startswith(prefix):
+			found = True
+			extra = {k: v for k, v in e.items() if k not in ('t', 'request', 'path', 'stage', 'outcome')}
+			print(e['t'][11:23], f"{e['stage']:12}", f"{e['outcome']:8}", short(e.get('path')),
+				json.dumps(extra, ensure_ascii=False)[:300] if extra else '')
+	if not found:
+		sys.exit(f'no request {prefix} in {TRACE}')
+
+
+if __name__ == '__main__':
+	arg = sys.argv[1] if len(sys.argv) > 1 else '20'
+	summary(int(arg)) if arg.isdigit() else detail(arg)

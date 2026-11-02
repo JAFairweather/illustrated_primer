@@ -1,0 +1,51 @@
+{
+  "model": "openai-codex/gpt-6-astra",
+  "reasoning_requested": "minimal",
+  "output_tokens_requested": 2400,
+  "request_deadline_ms": 30000,
+  "continue_on_deadline": true,
+  "attempts_per_question": 1,
+  "experiment": "Separately budgeted capacity diagnostic, not a controlled improvement claim over 15-second trials.",
+  "question_order": [
+    "research",
+    "ordinary"
+  ],
+  "prompt_sha256": "3374ea2c9d7984f676155510027464e12b77e4916cd003c0aa453a69a84d7b14",
+  "unchanged": [
+    "question images",
+    "question text",
+    "context/source briefs",
+    "baseline prompt",
+    "native limits",
+    "renderer",
+    "single call per question"
+  ],
+  "prohibited": [
+    "live changes",
+    "answer repair",
+    "rerolls",
+    "fallback model",
+    "question-specific geometry"
+  ],
+  "review": [
+    "correctness",
+    "visible_reason",
+    "scope",
+    "progression",
+    "readability",
+    "economy"
+  ],
+  "latency_note": "Offline transport time only. Responses after15s remain misses of the previous15s cutoff; not tablet latency.",
+  "tablet_proven": false,
+  "source_retrieval_proven": false,
+  "packets": {
+    "ordinary": {
+      "count": 14,
+      "sha256": "55ad5073afa7991f3baeab29336c1f0a5cad34df576c6abc57acf321447bf07e"
+    },
+    "research": {
+      "count": 3,
+      "sha256": "a5351a0594873c2341e39fe28f0d3a40c607af486e566a5ae8f62c9ecd94ec26"
+    }
+  }
+}

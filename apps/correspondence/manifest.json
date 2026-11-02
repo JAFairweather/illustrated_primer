@@ -1,0 +1,8 @@
+{
+	"name": "Correspondence",
+	"loadsBackend": false,
+	"entry": "/ui/letters.qml",
+	"id": "correspondence",
+	"supportsScaling": false,
+	"canHaveMultipleFrontends": false
+}

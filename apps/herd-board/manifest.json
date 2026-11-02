@@ -1,0 +1,8 @@
+{
+	"name": "The Cyber Times",
+	"loadsBackend": false,
+	"entry": "/ui/herd.qml",
+	"id": "herd-board",
+	"supportsScaling": false,
+	"canHaveMultipleFrontends": false
+}

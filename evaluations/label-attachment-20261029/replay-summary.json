@@ -1,0 +1,124 @@
+{
+  "kind": "saved-answer-renderer-replay",
+  "model_calls": 0,
+  "tablet_tested": false,
+  "cases": [
+    {
+      "case": "astra-picture-v3-integral",
+      "source_sha256": {
+        "story": "49ad4a7adff99dd3e6f851eb8597921be21b8a379712c6be4a426cc0e228745c",
+        "shapes": "623c56cd0350e84f871f8f1c32a9ed76a3ee3ce5f2c4d5f41bb53f5b83155081"
+      },
+      "before_points": 6112,
+      "after_points": 6132,
+      "valid": true,
+      "changed_panels": [
+        "curve",
+        "rectangles",
+        "refine",
+        "exact"
+      ]
+    },
+    {
+      "case": "luna-correction-v4-fractions",
+      "source_sha256": {
+        "story": "551d2f18d5f95892418a1f5555d9b3d7e2c6e59a4a944871c33d64d60ecc1550",
+        "shapes": "eccc89b0eb4319e4e8be31138d3066d933d682c1efa2360e2b8dcc63a7e6c492"
+      },
+      "before_points": 10788,
+      "after_points": 10816,
+      "valid": true,
+      "changed_panels": [
+        "p1",
+        "p2",
+        "p3"
+      ]
+    },
+    {
+      "case": "luna-correction-v4-inverse-mapping",
+      "source_sha256": {
+        "story": "f31a75650aca2aac04e2ffacafdb1781bdf2c62b03d3e903b6670134727231dc",
+        "shapes": "7192066f21a205c72fbaccb2f3e20c1daa5613144ab8f6926d775170600ea50b"
+      },
+      "before_points": 7983,
+      "after_points": 7983,
+      "valid": true,
+      "changed_panels": []
+    },
+    {
+      "case": "luna-correction-v4-pythagoras",
+      "source_sha256": {
+        "story": "e0c8b888dde6f66012efeba948d5838725b5feac83168eec7787e7fcc495a021",
+        "shapes": "92b10f727b173ef232c4560529714951937e4cce96dfb46d416d3007bdcf01d2"
+      },
+      "before_points": 5302,
+      "after_points": 5326,
+      "valid": true,
+      "changed_panels": [
+        "triangle",
+        "squares",
+        "hypotenuse",
+        "not-proof"
+      ]
+    },
+    {
+      "case": "luna-correction-v4-sensor-alarm",
+      "source_sha256": {
+        "story": "86f5d83497b20b43e791fb9efb0ef6a0ce57cdedd8bb6fb3843d217d8317940d",
+        "shapes": "1bc4723b6b9dd4b6d355185968e49b1e90ed7d7882b73a1e10c452d8bc758cb3"
+      },
+      "before_points": 4218,
+      "after_points": 4218,
+      "valid": true,
+      "changed_panels": []
+    },
+    {
+      "case": "luna-picture-v3-blue-sky",
+      "source_sha256": {
+        "story": "e97f47da175d519b5e7457ba1764cd4bf298d056dd66cde3b2f996c76e22f344",
+        "shapes": "678234ef92f7e355d358808df3745cbf4d31c800a0068e3ef92a909e8de968b8"
+      },
+      "before_points": 5153,
+      "after_points": 5153,
+      "valid": true,
+      "changed_panels": []
+    },
+    {
+      "case": "luna-picture-v3-fractions",
+      "source_sha256": {
+        "story": "21f9afe6dfae2a35d3c917a0aa4e6f477574f2c6681a33ba73f531bfc4636792",
+        "shapes": "69333e4952b7887e9be8e7c1b4e887c233f8ed80c98b595f7ac6b3ad18ae306b"
+      },
+      "before_points": 10800,
+      "after_points": 10820,
+      "valid": true,
+      "changed_panels": [
+        "p1",
+        "p2",
+        "p3"
+      ]
+    },
+    {
+      "case": "luna-picture-v3-sensor-alarm",
+      "source_sha256": {
+        "story": "1b82bef5a13f84cf38e18b60857b3cf795374b5bf7398c1b370aabc38b08ddd2",
+        "shapes": "100fb75ca8a41a8b7430265319ecb7a97048418a5836f26eaf3041489148b8f4"
+      },
+      "before_points": 3344,
+      "after_points": 3344,
+      "valid": true,
+      "changed_panels": []
+    },
+    {
+      "case": "luna-picture-v3-water-cycle",
+      "source_sha256": {
+        "story": "57146e2e9f7fede7dc571070190c7b3f5bbbeb7a66230abd469bcbe9ff4da396",
+        "shapes": "f4b8205d6d1fab8dbd26ac8f055adb6837dfa64850a068c3468f9030fa729f88"
+      },
+      "before_points": 3739,
+      "after_points": 3739,
+      "valid": true,
+      "changed_panels": []
+    }
+  ]
+}

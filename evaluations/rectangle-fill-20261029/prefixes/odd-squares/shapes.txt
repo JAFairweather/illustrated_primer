@@ -1,0 +1,1 @@
+{"p1": {"v": 1, "mode": "panel-shapes", "panel": "p1", "items": [{"id": "grid", "type": "axes", "x": [0, 1], "y": [0, 1], "aspect": "equal"}, {"id": "cell", "type": "rect", "in": "grid", "x": [0, 1], "y": [0, 1], "fill": "none"}, {"id": "one", "type": "label", "to": "cell", "text": "1 cell", "side": "top"}]}}

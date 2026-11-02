@@ -1,0 +1,8 @@
+{
+	"name": "The Walk Edition",
+	"loadsBackend": false,
+	"entry": "/ui/walk.qml",
+	"id": "walk-edition",
+	"supportsScaling": false,
+	"canHaveMultipleFrontends": false
+}

@@ -1,0 +1,67 @@
+#!/bin/bash
+# r1-primer's engine. A spoken question goes into the reMarkable notebook open on the tablet, written in your hand,
+# and the Primer's answer is told aloud while the tablet draws it: herd-board-primer on the Mac does the writing,
+# presses Respond and says what to tell when. The conversation that window 24 (r1-primer-ui) shows is kept in
+# $XDG_RUNTIME_DIR/r1-primer/log as JSON lines {k: q|s|e, t: TEXT} (a question, a part of the story told, an error),
+# what it is doing now in $XDG_RUNTIME_DIR/r1-primer/stage, and what the tablet is drawing now in
+# $XDG_RUNTIME_DIR/r1-primer/view.png.
+#   primer TEXT     a question; push-to-talk lands here from window 24 (lib/r1-ptt/transcribe)
+# R1_PRIMER_HOST picks the Mac (default: the host named mac in /etc/r1-herd/hosts).
+D=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}; A=$D/r1-primer; mkdir -p "$A" "$D/r1-herd"
+[ -r /etc/r1-herd/env ] && . /etc/r1-herd/env
+[ -r "$HOME/.config/r1/env" ] && . "$HOME/.config/r1/env"
+log() { jq -cn --arg k "$1" --arg t "$2" '{k: $k, t: $t}' >> "$A/log"; }
+stage() { printf '%s\n' "$1" > "$A/stage"; }
+q=$*
+[ -n "$q" ] || exit 0
+if read -r p 2>/dev/null < "$A/busy" && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+	R1_PRIMER=1 r1-say -k blocked "The Primer is still answering."; exit 1   # not held behind the story it means
+fi
+h=${R1_PRIMER_HOST:-$(awk '$1 == "mac" { print $2; exit }' /etc/r1-herd/hosts 2>/dev/null)}
+[ -n "$h" ] || { r1-say -k blocked "No Mac to write with."; exit 1; }
+
+# Other agents' words wait while the story is told (r1-say holds them in $A/held); the end says them in order.
+export R1_PRIMER=1
+release() {
+	exec 9>>"$A/held.lock"; flock -w 5 9
+	rm -f "$A/busy" "$A/stage"; [ -s "$A/held" ] && mv "$A/held" "$A/held.$$"
+	exec 9>&-
+	[ -s "$A/held.$$" ] || return 0
+	while IFS= read -r m; do
+		k=$(jq -r .k <<<"$m") e=$(jq -r .e <<<"$m") q=$(jq -r .q <<<"$m") t=$(jq -r .t <<<"$m")
+		ttl=(); [[ $e =~ ^[0-9]+$ ]] && { [ "$e" -le "$EPOCHSECONDS" ] && continue; ttl=(-ttl $((e - EPOCHSECONDS))); }
+		R1_PRIMER='' r1-say ${q:+-q} -k "$k" "${ttl[@]}" -- "$t"
+	done < "$A/held.$$"
+	rm -f "$A/held.$$"
+}
+echo $$ > "$A/busy"; trap release EXIT
+# The Mac sends each line in the narrator's voice when it has it ("audio", a WAV for r1-sayd); else Piper says it.
+rm -f "$A"/clip-*.wav
+clip() { c=$A/clip-$2.wav; jq -er '.audio // empty' <<<"$1" 2>/dev/null | base64 -d > "$c" 2>/dev/null && [ -s "$c" ] || c=; }
+log q "$q"
+rm -f "$A/view.png"
+stage "Looking at the tablet"
+told=0 failed='' n=0 endc=
+# On the Mac, ~/bin's python is the one the notebook server runs with: it has numpy and PIL.
+while IFS= read -r line; do
+	k=$(jq -r 'if .say then "say" elif .show then "show" else .stage // "" end' <<<"$line" 2>/dev/null)
+	case $k in
+	say) t=$(jq -r .say <<<"$line"); log s "$t"; told=1; n=$((n + 1)); clip "$line" $n; r1-say -k info ${c:+-clip "$c"} -- "$t" ;;
+	done) clip "$line" end; endc=$c ;;
+	show) jq -r .show <<<"$line" | base64 -d > "$A/view.tmp" 2>/dev/null && mv -f "$A/view.tmp" "$A/view.png" ;;
+	writing) stage "Writing in your notebook"; r1-say -tone tick ;;   # the first words said are the story's
+	reading) stage "Reading the page" ;;
+	thinking) stage "Thinking" ;;
+	drawing) stage "Drawing and telling" ;;
+	failed) failed=$(jq -r '.note // "It did not work."' <<<"$line") ;;
+	esac
+done < <(printf '%s\n' "$q" | timeout 700 ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+	-o ControlMaster=auto -o "ControlPath=$D/r1-herd/ssh-%C" -o ControlPersist=10m -o ServerAliveInterval=20 "$h" \
+	'PATH=$HOME/bin:/opt/homebrew/bin:/usr/bin:/bin:$HOME/.local/bin; read -r q; exec herd-board-primer ask "$q"' 2>/dev/null)
+if [ -n "$failed" ]; then
+	log e "$failed"; r1-say -k blocked -- "$failed"
+elif [ $told = 0 ]; then
+	log e "The Mac did not answer."; r1-say -k blocked "The Primer didn't answer."
+else
+	r1-say -k finished ${endc:+-clip "$endc"} "The end."
+fi

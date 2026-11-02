@@ -1,0 +1,46 @@
+[
+  {
+    "name": "capacity-ordinary",
+    "unchanged_svg": 46,
+    "newly_renderable": [
+      "inverse-mapping"
+    ],
+    "accepted": 13,
+    "source_answers_sha256": "10b9b0e0f7068e307fb3cbb0b076659c89b0ca7a62ca2843bb1c7401cc6fda64"
+  },
+  {
+    "name": "capacity-research",
+    "unchanged_svg": 3,
+    "newly_renderable": [],
+    "accepted": 1,
+    "source_answers_sha256": "a1854cb9cc7180edf169a585735e5a45bcacfe4136fadba41eafce7c3f2c165e"
+  },
+  {
+    "name": "luna-prompt",
+    "unchanged_svg": 40,
+    "newly_renderable": [],
+    "accepted": 11,
+    "source_answers_sha256": "3e6afb3b6b29a6c02f1d794adaa108d60fea936f1cdccdf586ddd50727a86c9c"
+  },
+  {
+    "name": "astra-prompt",
+    "unchanged_svg": 47,
+    "newly_renderable": [],
+    "accepted": 12,
+    "source_answers_sha256": "774213940b31521a4bad175abe7d02712ab9c943a7be191f6dbc0d1066af1d68"
+  },
+  {
+    "name": "luna-baseline",
+    "unchanged_svg": 41,
+    "newly_renderable": [],
+    "accepted": 10,
+    "source_answers_sha256": "180f4f3e8a5996d3fe3ff6bfacd38067aeba70884b8e6da00f2a9e0f7581d990"
+  },
+  {
+    "name": "astra-baseline",
+    "unchanged_svg": 41,
+    "newly_renderable": [],
+    "accepted": 10,
+    "source_answers_sha256": "8d603a3a07676a55332ab4bdb1db2889d8fa6497c932c344e38cfca4e612da8e"
+  }
+]

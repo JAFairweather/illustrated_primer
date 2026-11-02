@@ -1,0 +1,2027 @@
+; herdRespond: a RESPOND button on a "To NAME" notebook (OS 3.29).
+; Live mode reads the visible framebuffer and inserts the reply through xochitl's native text editor.
+; The notebook stays open throughout; xochitl saves its own document normally.
+; The legacy disk-write branch is retained for older non-live jobs.
+; Install with notebook_client.py deploy-tablet (private auth provisioning), then restart xochitl after saving notes.
+; Do not upload this raw template: the private tablet capability is filled only during deployment.
+
+AFFECT /qml/device/view/navigator/Navigator.qml
+	TRAVERSE FocusScope
+		LOCATE BEFORE ALL
+		INSERT {
+			property var herdJob: null
+			property string herdState: ""     // "", saving, sending, waiting, ready, writing, or a failure to show
+			property string herdNote: ""
+			property string herdAuth: "__HERD_TABLET_AUTH__" // Filled only in private tablet deployment.
+			function herdHttp(method, path, obj, done) {
+				var x = new XMLHttpRequest()
+				x.onreadystatechange = function() {
+					if (x.readyState !== XMLHttpRequest.DONE) return
+					var r = null
+					try { r = JSON.parse(x.responseText) } catch (e) {}
+					done(x.status, r)
+				}
+				x.open(method, "http://127.0.0.1:8791" + path)
+				x.setRequestHeader("Content-Type", "application/json")
+				x.setRequestHeader("Authorization", "Bearer " + herdAuth)
+				x.send(obj ? JSON.stringify(obj) : null)
+			}
+			function herdUuid(v) { return String(v || "").replace(/[{}]/g, "") }
+			function herdReopen(j) {
+				var e = Library.entryForId(j.doc)
+				if (e) requestOpenDocumentOnPage(e, j.idx)
+			}
+			function herdFail(st, r) {
+				console.warn("herdRespond: failure " + st + " " + (r && r.error ? r.error : "connection unavailable"))
+				var stopped = herdState === "writing" && herdJob && herdJob.live && herdJob.path && herdJob.request ? herdJob : null
+				herdState = "failed"; herdNote = herdFailureNote(r, st)
+				if (stopped) {
+					// Status only: never retry, clear an attempt, or transmit free-form diagnostics.
+					herdHttp("POST", "/native-text-failed", {page: stopped.path, request: stopped.request}, function() {})
+				}
+				if (herdJob && herdJob.path && herdJob.request) { herdTimer.interval = 2000; herdTimer.restart() }
+			}
+			function herdDismissFailure() {
+				// Dismissal is not a resend. The next explicit RESPOND starts a new job.
+				herdTimer.stop(); herdState = ""; herdNote = ""; herdJob = null
+			}
+			function herdFailureNote(reply, status) {
+				// Fixed presentation vocabulary only. Neither provider diagnostics
+				// nor arbitrary server text/paths are displayed on the notebook.
+				var error = reply && typeof reply.error === "string" ? reply.error : ""
+				var notes = ["Agent timed out", "Agent is busy", "Agent connection failed", "Agent service failed",
+					"Reply format wasn't supported", "Agent reply was cut short", "Request stopped",
+					"Page changed — request stopped", "Page unavailable — request stopped",
+					"Previous reply is still pending", "Reply couldn't be placed", "Reply may be incomplete",
+					"Mac connection lost", "Notebook connection needs setup", "Notebook service unavailable",
+					"No new handwriting found", "Reply needs attention"]
+				if (notes.indexOf(error) >= 0) return error
+				if (status === 401 || status === 403) return "Notebook connection needs setup"
+				if (status === 503) return "Notebook service unavailable"
+				if (!error && status === 0) return "Mac connection lost"
+				if (error === "Notebook model page_changed; request stopped before insertion; no automatic resend") return "Page changed — request stopped"
+				if (error === "Notebook model page_unavailable; request stopped before insertion; no automatic resend") return "Page unavailable — request stopped"
+				var match = /^Notebook model ([a-z_]+); reply held, no automatic resend$/.exec(error)
+				if (match) {
+					var code = match[1]
+					if (code === "deadline") return "Agent timed out"
+					if (code === "busy") return "Agent is busy"
+					if (code === "closed" || code === "unavailable") return "Agent connection failed"
+					if (code === "provider_error") return "Agent service failed"
+					if (code === "incomplete_response") return "Agent reply was cut short"
+					if (code === "cancelled") return "Request stopped"
+					if (["invalid_json", "invalid_response", "reply_too_large", "model_mismatch", "tools_forbidden"].indexOf(code) >= 0) return "Reply format wasn't supported"
+				}
+				if (error === "A notebook request is already pending on this page") return "Previous reply is still pending"
+				if (error === "unsupported native text anchor") return "Reply couldn't be placed"
+				if (error === "nothing new written since the last answer") return "No new handwriting found"
+				if (error.indexOf("Caption incomplete:") === 0 || error === "Tablet stopped while inserting this reply; inspect the page before retrying") return "Reply may be incomplete"
+				return "Reply needs attention"
+			}
+			// the DocumentView has just closed its notebook (saving the page): send it, and reopen
+			function herdRespond(doc, idx, page, supersedes) {
+				herdJob = { doc: herdUuid(doc), idx: idx, page: herdUuid(page), path: "", live: true, supersedes: supersedes || "" }
+				herdState = "saving"; herdNote = ""
+				herdTimer.interval = 1; herdTimer.restart()
+			}
+			// the answer is ready and the notebook has closed again: write it in, and reopen
+			function herdWrite() {
+				herdState = "writing"
+				herdTimer.interval = herdJob && herdJob.live ? 1 : 1500; herdTimer.restart()
+			}
+			function herdStep() {
+				var j = herdJob
+				if (!j) { herdTimer.stop(); return }
+				if (herdState === "saving") {
+					herdState = "sending"; herdTimer.stop()
+					herdHttp("POST", "/respond", { doc: j.doc, page: j.page, live: j.live === true, supersedes: j.supersedes || "" }, function(st, r) {
+						if (st === 200) { j.path = r.page; j.request = r.request; herdState = "waiting"; herdNote = "Sent to " + r.to
+							herdTimer.interval = 250; herdTimer.restart() }
+						else herdFail(st, r)
+						if (!j.live) herdReopen(j)
+					})
+				} else if (herdState === "failed") {
+					if (!j.path || !j.request) { herdTimer.stop(); return }
+					herdHttp("GET", "/answer?page=" + encodeURIComponent(j.path), null, function(st, r) {
+						// A late save acknowledgement may clear ONLY this request's error.
+						// Never auto-write a failed/partially inserted reply again.
+						if (herdJob !== j || herdState !== "failed" || st !== 200 || !r) return
+						if (r.request === j.request && r.state === "written") herdDismissFailure()
+						else if (r.request === j.request && r.state === "ready" && r.retry_token && r.retry_token !== j.lastRetry) {
+							// Explicit server preflight proved this request never began insertion.
+							j.lastRetry = r.retry_token; herdTimer.stop(); herdState = "ready"
+						}
+					})
+				} else if (herdState === "waiting") {
+					herdHttp("GET", "/answer?page=" + encodeURIComponent(j.path), null, function(st, r) {
+						// A late/overlapping poll cannot start another insertion or
+						// apply an old request's state to a newer notebook exchange.
+						if (st !== 200 || !r || herdJob !== j || herdState !== "waiting" || r.request !== j.request) return
+						if (r.state === "ready") { herdTimer.stop(); herdState = "ready" }   // ready starts the write: stop the poll first
+						else if (r.state === "waiting" && r.media_pending) herdNote = "Generating image…"
+						else if (r.state === "failed" || r.state === "no answer") { herdState = "failed"; herdNote = herdFailureNote(r); herdTimer.stop() }
+					})
+				} else if (herdState === "writing") {
+					herdTimer.stop()
+					herdHttp("POST", j.live ? "/write-live" : "/write", { page: j.path }, function(st, r) {
+						if (st === 200) { if (r && typeof r.idx === "number" && r.idx >= 0) j.idx = r.idx; herdState = ""; herdNote = ""; herdJob = null }
+						else herdFail(st, r)
+						if (!j.live) herdReopen(j)
+					})
+				}
+			}
+			Timer { id: herdTimer; repeat: true; onTriggered: herdStep() }
+			onHerdStateChanged: console.warn("herdRespond: state -> " + herdState + " " + herdNote)
+		}
+	END TRAVERSE
+END AFFECT
+
+AFFECT /qml/device/view/documentview/DocumentView.qml
+	TRAVERSE FocusScope#root
+		LOCATE AFTER ALL
+		INSERT {
+			Rectangle {
+				id: herdButton
+				property string herdTitle: sceneView.document ? String(sceneView.document.visibleName || sceneView.document.title || "") : ""
+				property bool herdMine: navigator.herdJob !== null && sceneView.document && navigator.herdJob.doc === navigator.herdUuid(sceneView.document.id)
+				property string herdPage: navigator.herdUuid(root.currentPageId)
+				property string herdFollowedPage: ""
+				property int herdOpenPasses: 0
+				property string herdResumeCheckedPage: ""
+				property string herdIncompleteRequest: ""
+				property string herdIncompletePage: ""
+				property string herdIncompleteDismissed: ""
+				property bool herdResumeInFlight: false
+				property string herdContextSurface: String(Date.now()) + "-" + String(Math.floor(Math.random() * 1000000000))
+				property int herdContextSequence: 0
+				property int herdContextRevision: 0
+				property int herdContextInk: 0
+				property bool herdContextBusy: false
+				property string herdContextRepairSeen: ""
+				property string herdContextLayoutSignature: ""
+				property string herdAuditSeen: ""
+				property double herdAwakeUntil: 0
+				property bool herdAwakeActive: false
+				onHerdAwakeActiveChanged: herdSetDisplayAwake(herdAwakeActive)
+				function herdSetDisplayAwake(active) {
+					// SlumberInhibit covers system slumber, not display LightSleep.
+					// Reset native idle time only during bounded explicit maintenance.
+					// No fake pen events or persistent power settings.
+					if (!active || root.inSuspend) return
+					if (typeof BatteryManager.onActivity !== "function") {
+						console.warn("herdRespond: native activity heartbeat unavailable")
+						return
+					}
+					BatteryManager.onActivity()
+					console.warn("herdRespond: native activity heartbeat")
+				}
+				property var herdProbeJob: null
+				property var herdProbeView: null
+				property string herdProbeSeen: ""
+				property int herdProbePasses: 0
+				property string herdProbePhase: ""
+				property int herdProbeSelected: 0
+				property int herdProbeCloned: 0
+				property bool herdProbeCloneValue: false
+				property bool herdProbeHasLength: false
+				property string herdProbeReason: "none"
+				property var herdProbeItems: null
+				property var herdProbeTextAnchor: null
+				property var herdProbeTextBounds: null
+				property var herdProbeInkBounds: null
+				property bool herdPasteBusy: false
+				property var herdLayoutCapture: null
+				property bool herdLayoutPenBlocked: false
+				property var herdPenSurface: {
+					var found = null
+					for (var i = 0; i < sceneView.children.length; i++) {
+						var child = sceneView.children[i]
+						if (String(child).indexOf("PenInputSurface") < 0) continue
+						if (found) return null
+						found = child
+					}
+					return found
+				}
+				Binding {
+					// Keep one stable binding, rather than saving/restoring a transient
+					// null handler while adjustViewActive also changes its native route.
+					// This is DeviceSceneView.qml's installed firmware expression plus
+					// the independent capture guard; capture cleanup never swaps bindings.
+					target: herdButton.herdPenSurface
+					property: "handler"
+					value: sceneView.sceneView && !sceneView.adjustViewActive && !herdButton.herdLayoutPenBlocked ? sceneView.strokeHandler : null
+				}
+				property var herdPasteController: null
+				property int herdPasteLockPasses: 0
+				property var herdInk: null
+				property var herdProbeImportCallback: null
+				property string herdProbeImportDoc: ""
+				property string herdProbeImportPage: ""
+				property var herdLessonImport: null
+				// SceneSelectionHandler.open() shows handles/menu and tints the
+				// preview. An automatic ink paste needs the preview, not editing
+				// chrome. Keep the handler/selection/commit and input lock intact.
+				function herdQuietInkSelection() {
+					var selection = sceneView.selectionHandler
+					if (herdInk && herdInk.ownsLock && herdPasteBusy && selection && selection.controlsAreVisible)
+						selection.controlsAreVisible = false
+				}
+				Connections {
+					target: sceneView.selectionHandler
+					function onControlsAreVisibleChanged() { herdButton.herdQuietInkSelection() }
+				}
+				Connections {
+					target: sceneView
+					function onSelectionHandlerChanged() { herdButton.herdQuietInkSelection() }
+				}
+				Binding {
+					target: root; property: "enabled"; value: false
+					when: herdButton.herdPasteBusy
+					restoreMode: Binding.RestoreBindingOrValue
+				}
+				Binding {
+					target: sceneView; property: "adjustViewActive"; value: true
+					when: herdButton.herdPasteBusy
+					restoreMode: Binding.RestoreBindingOrValue
+				}
+				Binding {
+					target: sceneView.strokeHandler; property: "lineTool"; value: Line.SelectionTool
+					when: herdButton.herdPasteBusy
+					restoreMode: Binding.RestoreBindingOrValue
+				}
+				Component {
+					id: herdAssetScene
+					SceneView {
+						width: 1404; height: 1872
+						viewportType: SceneView.DeviceViewport
+						visible: false; focus: false
+					}
+				}
+				// Temporary maintenance only. No fake input and no persistent setting.
+				SlumberInhibit {
+					powerState: PowerState
+					name: "herd.notebook.maintenance"
+					canSuspend: !herdButton.herdAwakeActive || !herdButton.visible || root.inSuspend
+				}
+				Timer {
+					interval: 90000; repeat: true
+					running: herdButton.herdAwakeActive
+					onTriggered: herdButton.herdSetDisplayAwake(herdButton.herdAwakeActive)
+				}
+				visible: herdTitle.indexOf("To ") === 0
+				anchors.right: parent.right
+				anchors.top: parent.top
+				anchors.rightMargin: 40
+				anchors.topMargin: 112
+				z: 100000
+				width: Math.min(660, herdLabel.implicitWidth + 56)
+				height: Math.max(84, herdLabel.implicitHeight + 32)
+				radius: 8
+				color: herdMine && navigator.herdState !== "failed" ? "white" : "black"
+				border.color: "black"
+				border.width: 3
+				function herdStatusLabel() {
+					if (!herdMine && herdIncompletePage === herdPage && herdIncompleteRequest) return "Reply may be incomplete — tap to dismiss"
+					if (!herdMine) return herdNewQuestionRequest() ? "New question — keep previous reply" : "RESPOND"
+					var s = navigator.herdState, j = navigator.herdJob
+					if (s === "failed") {
+						var note = navigator.herdFailureNote({error: navigator.herdNote})
+						if (note === "Agent timed out" || note === "Agent is busy") return note + "\nDismiss, then Respond to retry"
+						if (note === "Mac connection lost") return note + "\nCheck Mac and Wi-Fi; tap to dismiss"
+						if (note === "Previous reply is still pending" || note === "Reply couldn't be placed") return note + "\nReply held; tap to dismiss"
+						if (note === "Reply may be incomplete") return note + "\nInspect the page; tap to dismiss"
+						return note + "\nTap to dismiss"
+					}
+					if (j && j.live && j.page !== herdPage && (s === "ready" || s === "waiting"))
+						return s === "ready" ? "Reply waiting on original page" : "Request on another page"
+					if (s === "waiting") return navigator.herdNote + " — waiting"
+					if (s === "writing" && navigator.herdNote === "Saving reply…") return navigator.herdNote
+					if (s === "ready" || s === "writing") return "Answer coming in…"
+					return "Sending…"
+				}
+				function herdObserveIncomplete(reply, page, doc) {
+					if (!reply || !reply.accepted || navigator.herdJob || root.inSuspend || sceneView.isLoading ||
+						herdPage !== page || !sceneView.document || navigator.herdUuid(sceneView.document.id) !== doc ||
+						reply.incomplete_reply === undefined) return
+					var hint = reply.incomplete_reply
+					if (hint !== null && (!hint || typeof hint.request !== "string" || !/^notebook-[0-9a-f]{32}$/.test(hint.request))) return
+					if (herdIncompletePage !== page || hint === null) herdIncompleteDismissed = ""
+					herdIncompletePage = page
+					herdIncompleteRequest = hint && hint.request !== herdIncompleteDismissed ? hint.request : ""
+				}
+				function herdDismissIncomplete() {
+					if (herdIncompletePage !== herdPage || !herdIncompleteRequest) return false
+					herdIncompleteDismissed = herdIncompleteRequest
+					herdIncompleteRequest = ""
+					return true // Presentation only: no insertion, retry or journal changes.
+				}
+				function herdNewQuestionRequest() {
+					return herdIncompletePage === herdPage ? herdIncompleteDismissed : ""
+				}
+				function herdRequestInputSave() {
+					// Isolated trial of the same native hint used by OS 3.29 Page
+					// Overview. This is NOT a save-complete acknowledgement: all
+					// server snapshot/revision/preservation checks still apply.
+					if (!sceneView.document || navigator.herdUuid(sceneView.document.id) !== "905df7ae-ff54-46b9-a71e-45bb02bef638" ||
+						!herdPage || root.inSuspend || sceneView.isLoading || navigator.herdJob) return false
+					var c = root.sceneController
+					if (!c || typeof c.requestDeferredCompleted !== "function") return false
+					try {
+						c.requestDeferredCompleted()
+						console.warn("herdRespond: input deferred-work requested")
+						return true
+					} catch (e) {
+						console.warn("herdRespond: input deferred-work unavailable")
+						return false
+					}
+				}
+				Text {
+					id: herdLabel
+					anchors.centerIn: parent
+					width: parent.width - 56
+					wrapMode: Text.WordWrap
+					horizontalAlignment: Text.AlignHCenter
+					font.pointSize: 18
+					font.bold: true
+					color: herdButton.herdMine && navigator.herdState !== "failed" ? "black" : "white"
+					text: herdButton.herdStatusLabel()
+				}
+				MouseArea {
+					anchors.fill: parent
+					enabled: !herdButton.herdMine || navigator.herdState === "failed"
+					onClicked: {
+						if (herdButton.herdMine && navigator.herdState === "failed") {
+							herdButton.herdIncompleteDismissed = navigator.herdJob && navigator.herdJob.request ? navigator.herdJob.request : ""
+							herdButton.herdIncompletePage = navigator.herdJob && navigator.herdJob.page ? navigator.herdJob.page : ""
+							navigator.herdDismissFailure(); return
+						}
+						if (herdButton.herdDismissIncomplete()) return
+						var d = sceneView.document
+						LibraryController.setLastOpenedPage(d.id, root.currentPage)
+						herdButton.herdRequestInputSave()
+						navigator.herdRespond(d.id, root.currentPage, String(root.currentPageId || ""), herdButton.herdNewQuestionRequest())
+					}
+				}
+				// the answer is ready: close the notebook (saving what was written meanwhile), then the Navigator writes it in
+				function herdTake() {
+					if (navigator.herdState !== "ready" || !herdMine) return
+					if (navigator.herdJob.live && navigator.herdJob.page !== herdPage) return
+					if (navigator.herdJob.live) { herdText(); return }
+					LibraryController.setLastOpenedPage(sceneView.document.id, root.currentPage)
+					navigator.herdWrite()
+					if (!navigator.herdJob.live) root.close()
+				}
+				function herdLessonCurrent(frozen) {
+					return frozen && navigator.herdJob === frozen.job && herdMine && herdPage === frozen.job.page &&
+						sceneView.document && navigator.herdUuid(sceneView.document.id) === frozen.job.doc &&
+						!root.inSuspend && !sceneView.isLoading && herdContextSurface === frozen.surface &&
+						herdContextRevision === frozen.revision && herdContextInk === frozen.ink
+				}
+				function herdStopLessonImport() {
+					herdLessonImportTimer.stop()
+					var work = herdLessonImport
+					herdLessonImport = null
+					if (work && work.callback) Library.entryAdded.disconnect(work.callback)
+				}
+				function herdImportLesson(reply, frozen) {
+					if (herdLessonImport || !herdLessonCurrent(frozen)) throw new Error("Page changed before lesson import")
+					var spec = reply.import_source
+					// Stories reuse immutable additions; one source per panel, at most 12.
+					// Legacy lessons keep six picture steps plus one equation, and up to twelve handwritten regions.
+					var story = spec && spec.story_version === 1
+					if (!spec || (spec.story_version !== undefined && !story) || !spec.doc || !spec.parent || typeof spec.pages !== "number" || spec.pages % 1 !== 0 || spec.pages < 1 || spec.pages > (story ? 12 : 19) || !reply.request ||
+						typeof DocumentImporter.importFromUrls !== "function" || !Library.entryAdded) throw new Error("Native lesson importer unavailable")
+					var work = {frozen: frozen, reply: reply, ticks: 0, entry: null, callback: null}
+					work.callback = function(id) {
+						if (herdLessonImport !== work || work.entry) return
+						var entry = Library.entryForId(id)
+						if (entry && String(entry.visibleName) === "Agent lesson source " + spec.doc) work.entry = entry
+					}
+					herdLessonImport = work
+					Library.entryAdded.connect(work.callback)
+					herdLessonImportTimer.restart()
+					DocumentImporter.importFromUrls(["file:///home/root/.cache/herd-board/imports/" + spec.doc + ".rmdoc"], spec.parent)
+				}
+				function herdLessonImportTick() {
+					var work = herdLessonImport
+					if (!work) { herdLessonImportTimer.stop(); return }
+					try {
+						if (!herdLessonCurrent(work.frozen)) throw new Error("Page or input changed during lesson import")
+						if (++work.ticks > 80) throw new Error("Native lesson import timed out; reply held")
+						if (!work.entry) return
+						for (var i = 0; i < work.reply.import_source.pages; i++) {
+							if (!navigator.herdUuid(work.entry.idForPage(i))) return
+						}
+						var doc = navigator.herdUuid(work.entry.id)
+						if (!doc || doc === work.frozen.job.doc) throw new Error("Invalid imported lesson identity")
+						herdStopLessonImport()
+						herdText({request: work.reply.request, doc: doc}, work.frozen)
+					} catch (e) { herdStopLessonImport(); navigator.herdFail(0, {error: String(e)}) }
+				}
+				Timer { id: herdLessonImportTimer; interval: 250; repeat: true; onTriggered: herdButton.herdLessonImportTick() }
+				function herdText(imported, frozen, layout) {
+					var j = navigator.herdJob
+					if (!frozen) frozen = {job: j, surface: herdContextSurface, revision: herdContextRevision, ink: herdContextInk}
+					if (!herdLessonCurrent(frozen)) { navigator.herdFail(0, {error: "Return to the original unchanged page"}); return }
+					navigator.herdState = "writing"
+					navigator.herdHttp("POST", "/native-text", {page: j.path, ink_version: 1, lesson_version: 1, story_version: 1, preservation_version: 1, reveal_version: 1, playback_version: 1, pen_equations_version: 1, hand_version: 1, imported: imported || null, layout: layout || null}, function(st, r) {
+						if (st !== 200) { navigator.herdFail(st, r); return }
+						if (!herdLessonCurrent(frozen)) { navigator.herdFail(0, {error: "Page or input changed before writing"}); return }
+						try {
+							if (r.import_source) { herdImportLesson(r, frozen); return }
+							if (r.measure_layout) {
+								herdMeasureLayout(r.measure_layout, function(result) { herdSubmitLayout(imported, frozen, result) }); return
+							}
+							var c = root.sceneController
+							if (!c) throw new Error("Native text controller unavailable")
+							// Capture scene coordinates BEFORE focusing text can scroll the viewport.
+							var targetPoint = sceneView.viewToScene(Qt.point(250, r.top))
+							var target = targetPoint.y
+							var inkBottom = sceneView.viewToScene(Qt.point(250, r.inkBottom === undefined ? r.top : r.inkBottom)).y
+							var fresh = !c.hasRootDocument
+							var blocks = r.blocks
+							if (blocks && blocks.length) {
+								j.nativeLesson = blocks.some(function(b) { return b.kind === "ink" && !!b.playback })
+								// A reply that types no words (all handwriting and pictures) starts its ink just below the
+								// question, over its blank label lines, but below any typed text already on the page.
+								var typed = fresh ? null : c.rootDocumentBoundingRect
+								j.blankProse = r.label === "" && blocks.every(function(b) { return b.kind !== "text" || b.text === "" })
+								j.inkFloor = Math.max(inkBottom + 40, typed && typed.height > 0 ? typed.y + typed.height + 20 : -Infinity)
+								if (blocks[0].kind !== "text") blocks.unshift({kind: "text", text: "", styles: []})
+								r.text = blocks[0].text
+								r.styles = blocks[0].styles || []
+							}
+							if (fresh) c.createRootDocument(ParagraphStyle.Type.Paragraph)
+							root.enterTextMode(true, targetPoint)
+							c.setCursorPosition(targetPoint, SceneController.MoveAnchor, SceneController.OverscrollAlwaysAllowed)
+							console.warn("herdRespond: native placement target=" + target + " cursor=" + c.textCursorPosition.y + " index=" + c.textCursorIndex + " length=" + c.rootDocumentLength)
+							herdLayout({job: j, reply: r, ordered: blocks, blockNext: 1, target: target, inkBottom: inkBottom, targetPoint: targetPoint, nativeGap: true, padding: 0, passes: 0, focusAttempts: 0})
+						} catch (e) { herdStopLessonImport(); root.exitTextMode(); navigator.herdFail(0, {error: String(e)}) }
+					})
+				}
+				function herdSubmitLayout(imported, frozen, result, handoff) {
+					// Publish current native activity after cursor cleanup, before
+					// submitting the ORIGINAL hash-bound measurement. A heartbeat
+					// sampled during native reflow is not a completion barrier.
+					var h = handoff || {started: Date.now(), pending: false, done: false}
+					if (h.done) return
+					function fail(message) { h.done = true; navigator.herdFail(0, {error: message}) }
+					function inputRestored() {
+						return !herdPasteBusy && !herdLayoutPenBlocked && !herdLayoutCapture && root.enabled === true &&
+							!sceneView.adjustViewActive && herdPenSurface && herdPenSurface.handler === sceneView.strokeHandler &&
+							!sceneView.penClose && sceneView.strokeHandler.timeSincePenUp() >= 1500
+					}
+					if (!frozen || navigator.herdJob !== frozen.job || !herdMine || herdPage !== frozen.job.page ||
+						!sceneView.document || navigator.herdUuid(sceneView.document.id) !== frozen.job.doc ||
+						root.inSuspend || herdContextSurface !== frozen.surface || herdContextRevision !== frozen.revision || herdContextInk !== frozen.ink) {
+						fail("Page or input changed after layout measurement"); return
+					}
+					if (!inputRestored()) { fail("Native input state changed after layout measurement"); return }
+					if (Date.now()-h.started >= 3000) { fail("Native layout context confirmation timed out"); return }
+					herdLater(function() { herdSubmitLayout(imported, frozen, result, h) }, false, "layout")
+					if (h.pending || herdContextBusy || sceneView.isLoading || !root.sceneController || root.sceneController.working) return
+					h.pending = true
+					console.warn("herdRespond: publishing layout context")
+					herdReportContext(function(accepted) {
+						if (h.done) return
+						if (!accepted || !herdLessonCurrent(frozen) || !inputRestored() || !root.sceneController ||
+							root.sceneController.working || Date.now()-h.started >= 3000) {
+							fail("Native layout context was not confirmed"); return
+						}
+						h.done = true
+						console.warn("herdRespond: layout context confirmed")
+						herdText(imported, frozen, result)
+					})
+				}
+				function herdLater(callback, waitingForSave, slot) {
+					// Autosave runs on a seconds-scale cadence. A skipped cursor
+					// query must not spend the bounded retry budget at UI-frame speed.
+					// One pending step per flow: a later step of the same flow replaces
+					// its own, never another flow's (one shared slot lost a save check).
+					var due = Date.now() + (waitingForSave === true ? 1000 : 150), next = {}
+					for (var k in herdLayoutTimer.slots) next[k] = herdLayoutTimer.slots[k]
+					next[slot || "text"] = {callback: callback, due: due}
+					herdLayoutTimer.slots = next
+					herdLaterArm()
+				}
+				function herdLaterArm() {
+					var first = null
+					for (var k in herdLayoutTimer.slots) first = first === null ? herdLayoutTimer.slots[k].due : Math.min(first, herdLayoutTimer.slots[k].due)
+					if (first === null) { herdLayoutTimer.stop(); return }
+					herdLayoutTimer.interval = Math.max(1, first - Date.now())
+					herdLayoutTimer.restart()
+				}
+				// The server chooses the saved hash and supported cursor index. Read
+				// native layout only, restore the cursor, and hold on ANY page/input
+				// change. No guessed transform, hidden edit, or content insertion.
+				function herdSavedLengthPending(command) {
+					// A saved after-snapshot with a different text length cannot pass
+					// preservation proof. Let autosave catch up before moving/focusing
+					// the cursor to measure it. This never supplies or accepts proof.
+					var c = root.sceneController
+					return !!(command && command.phase === "after" &&
+						Number.isInteger(command.length) && command.length >= 1 && command.length <= 262144 &&
+						c && Number.isInteger(c.rootDocumentLength) && c.rootDocumentLength >= 1 && c.rootDocumentLength <= 262144 &&
+						command.length !== c.rootDocumentLength)
+				}
+				function herdPenWait(work) {
+					// A pen hovering while a reply draws is normal. The capture has already handed it back;
+					// measure again once it has been lifted for 1.5 s. Writing meanwhile changes the ink
+					// revision; the server's proof re-measures at the new revision and still checks old ink.
+					if (navigator.herdJob !== work.job || !herdMine || herdPage !== work.job.page) return
+					if ((work.penWaits = (work.penWaits || 0)+1) > 120) { navigator.herdFail(0, {error: "Pen stayed at the page; reply held"}); return }
+					if (sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500) { herdLater(function() { herdPenWait(work) }, true); return }
+					herdTextDone(work)
+				}
+				function herdFocusOwner(item, depth, budget) {
+					if (!item || depth > 20 || --budget.left < 0) throw new Error("Cannot identify native focus owner")
+					var found = null
+					for (var i = 0; i < item.children.length; i++) {
+						var candidate = herdFocusOwner(item.children[i], depth+1, budget)
+						if (candidate) { if (found) throw new Error("Ambiguous native focus owner"); found = candidate }
+					}
+					return found || (item.activeFocus ? item : null)
+				}
+				function herdMeasureLayout(command, callback, penBusy) {
+					var c = root.sceneController
+					// A reopened pen-mode page can have no active text cursor (-1).
+					// It is not an editable position to restore with setCursorIndex.
+					// Query the existing root while staying in pen mode, then park a
+					// hidden cursor at index 0. Never create text or enterTextMode here.
+					var inactiveCursor = !!(c && c.textCursorIndex === -1 && sceneView.sceneView &&
+						sceneView.sceneView.textModeEnabled === false && typeof c.setCursorVisible === "function")
+					var focus = herdFocusOwner(sceneView, 0, {left: 1024})
+					var multiple = command && Array.isArray(command.anchors)
+					var indices = command && command.indices
+					var valid = Array.isArray(indices) && indices.length >= 1 && indices.length <= (multiple ? 64 : 1)
+					var indexGuard = valid ? "" : "indices-shape"
+					if (command && command.anchors !== undefined && !multiple) { valid = false; if (!indexGuard) indexGuard = "anchors-shape" }
+					if (multiple && (typeof command.length !== "number" || !isFinite(command.length) || command.length % 1 !== 0 || command.length < 1 || command.length > 262144)) { valid = false; if (!indexGuard) indexGuard = "saved-length" }
+					if (valid) for (var k = 0; k < indices.length; k++) {
+						if (typeof indices[k] !== "number" || !isFinite(indices[k]) || indices[k] % 1 !== 0 || indices[k] < 0 || indices[k] > (multiple ? 262143 : 31)) { valid = false; if (!indexGuard) indexGuard = "indices-range" }
+						else if (k > 0 && indices[k] <= indices[k-1]) { valid = false; if (!indexGuard) indexGuard = "indices-order" }
+						else if (multiple && indices[k] >= command.length) { valid = false; if (!indexGuard) indexGuard = "indices-saved-length" }
+						else if (!c || indices[k] >= c.rootDocumentLength) { valid = false; if (!indexGuard) indexGuard = "indices-native-length" }
+					}
+					// Report only fixed guard names, never page text or command values.
+					// Live13 held before capture; a generic error hid which native
+					// precondition failed. Keep every existing refusal unchanged.
+					var unavailable = []
+					if (!command || !navigator.herdJob || command.request !== navigator.herdJob.request) unavailable.push("request")
+					if (!valid) unavailable.push(indexGuard)
+					if (!c) unavailable.push("controller")
+					else {
+						if (!c.hasRootDocument) unavailable.push("root-document")
+						if (typeof c.rootDocumentLength !== "number" || !isFinite(c.rootDocumentLength) ||
+							c.rootDocumentLength % 1 !== 0 || c.rootDocumentLength < 1 || c.rootDocumentLength > 262144) unavailable.push("text-length")
+						if (c.working) unavailable.push("working")
+						if (c.hasTextSelection || c.selectionItemCount) unavailable.push("selection")
+						if (!inactiveCursor && (typeof c.textCursorIndex !== "number" || !isFinite(c.textCursorIndex) ||
+							c.textCursorIndex % 1 !== 0 || c.textCursorIndex < 0 || c.textCursorIndex > c.rootDocumentLength)) unavailable.push("cursor")
+					}
+					if (herdLayoutCapture || herdPasteBusy || herdInk || herdProbeJob) unavailable.push("busy")
+					if (!focus) unavailable.push("focus")
+					if (!sceneView.sceneView || typeof sceneView.sceneView.textModeEnabled !== "boolean") unavailable.push("text-mode")
+					if (root.enabled !== true || sceneView.adjustViewActive) unavailable.push("view-disabled")
+					if (unavailable.length) throw new Error("Native layout capture unavailable: " + unavailable.join(","))
+					var pen = null
+					for (var i = 0; i < sceneView.children.length; i++) if (String(sceneView.children[i]).indexOf("PenInputSurface") >= 0) pen = sceneView.children[i]
+					if (!pen || pen !== herdPenSurface || pen.handler !== sceneView.strokeHandler) throw new Error("Native pen route is unavailable before capture")
+					herdLayoutCapture = {command: command, callback: callback, controller: c, job: navigator.herdJob,
+						cursor: c.textCursorIndex, inactiveCursor: inactiveCursor, matrix: herdInkView(), phase: "locking", ticks: 0,
+						multiple: multiple, next: 0, samples: [], length: c.rootDocumentLength,
+						budget: 30 + (multiple ? indices.length : 0),
+						focus: focus, pen: pen, handler: pen.handler, tool: sceneView.strokeHandler.lineTool, penBusy: penBusy || null,
+						view: sceneView.sceneView, textMode: sceneView.sceneView.textModeEnabled}
+					herdLayoutPenBlocked = true
+					herdPasteBusy = true
+					sceneView.sceneView.textModeEnabled = false // prevent cursor-follow during the bounded anchor query
+					herdLayoutCaptureTimer.restart()
+				}
+				function herdLayoutCaptureFinish(error) {
+					var a = herdLayoutCapture
+					if (!a) return
+					if (a.phase !== "cleanup") {
+						a.error = error; a.phase = "cleanup"
+						try {
+							if (root.sceneController !== a.controller || sceneView.sceneView !== a.view || herdPage !== a.command.page) throw new Error("Capture owner changed before cleanup")
+							if (a.controller.textCursorIndex !== a.cursor) a.controller.setCursorIndex(a.cursor, SceneController.MoveAnchor)
+							if (a.inactiveCursor) a.controller.setCursorVisible(false, true)
+							a.view.textModeEnabled = a.textMode
+						} catch (e) { a.error = String(e) }
+						return // keep ALL input guarded while the restored cursor settles
+					}
+					var restored = false
+					try {
+						if (root.sceneController !== a.controller || sceneView.sceneView !== a.view || herdPage !== a.command.page ||
+							herdContextSurface !== a.command.surface || a.pen !== herdPenSurface ||
+							a.controller.textCursorIndex !== a.cursor || a.view.textModeEnabled !== a.textMode || !herdLayoutPenBlocked || a.pen.handler !== null)
+							throw new Error("Native focus or input routing was not restored")
+						// Writing that landed as the capture closed is not a routing fault: the measurement
+						// is stale, so measure again once the pen lifts, and the server's proof decides.
+						if ((herdContextRevision !== a.command.content_revision || herdContextInk !== a.command.ink_revision) &&
+							(!a.error || a.penRetry)) { a.error = a.error || "Handwriting changed during native layout capture"; a.penRetry = !!a.penBusy }
+						// Restore UI/focus with the INDEPENDENT pen guard still held.
+						// No yield/event-loop boundary exposes input during these checks.
+						herdPasteBusy = false
+						a.focus.forceActiveFocus()
+						if (herdFocusOwner(sceneView, 0, {left: 1024}) !== a.focus || root.enabled !== true ||
+							sceneView.adjustViewActive || sceneView.strokeHandler.lineTool !== a.tool || a.pen.handler !== null)
+							throw new Error("Native focus was not restored; input remains held")
+						herdLayoutPenBlocked = false
+						if (a.pen.handler !== a.handler) throw new Error("Native pen route was not restored; input remains held")
+						restored = true
+					} catch (e) { a.error = String(e) }
+					herdLayoutCaptureTimer.stop()
+					if (!restored) {
+						// The reply stays held, but James keeps his page: holding input here
+						// locked the whole note until a reboot (tablet, 2026-10-29). Both guards
+						// are bindings, so releasing them returns the firmware's own pen route.
+						try { if (sceneView.sceneView === a.view) a.view.textModeEnabled = a.textMode } catch (e) {}
+						herdLayoutCapture = null; herdLayoutPenBlocked = false; herdPasteBusy = false
+						navigator.herdFail(0, {error: a.error}); return
+					}
+					herdLayoutCapture = null
+					if (a.error && a.penRetry) { a.penBusy(); return }
+					if (a.error) { navigator.herdFail(0, {error: a.error}); return }
+					a.callback(a.multiple ? {command: a.command, samples: a.samples} : {command: a.command, first: a.first})
+				}
+				function herdLayoutCaptureTick() {
+					var a = herdLayoutCapture
+					if (!a) { herdLayoutCaptureTimer.stop(); return }
+					if (a.phase === "held") { herdLayoutCaptureTimer.stop(); return }
+					if (a.phase === "cleanup") { herdLayoutCaptureFinish(a.error); return }
+					try {
+						var c = a.controller, q = a.command
+						if (++a.ticks > a.budget) throw new Error("Native layout capture timed out")
+						var changed = []
+						if (navigator.herdJob !== a.job) changed.push("job")
+						if (!herdMine) changed.push("owner")
+						if (root.inSuspend) changed.push("suspended")
+						if (root.sceneController !== c) changed.push("controller")
+						if (!sceneView.document || navigator.herdUuid(sceneView.document.id) !== q.doc) changed.push("document")
+						if (herdPage !== q.page) changed.push("page")
+						if (herdContextSurface !== q.surface) changed.push("surface")
+						if (herdContextInk !== q.ink_revision) changed.push("ink-revision")
+						if (herdContextRevision !== q.content_revision) changed.push("content-revision")
+						if (sceneView.penClose) changed.push("pen-near")
+						var penIdle = sceneView.strokeHandler.timeSincePenUp()
+						if (penIdle < 1500) changed.push("pen-idle-ms=" + penIdle)
+						if (changed.length && a.penBusy && changed.every(function(x) { return x === "pen-near" || x === "ink-revision" || x === "content-revision" || x.indexOf("pen-idle-ms=") === 0 })) a.penRetry = true
+						if (changed.length) throw new Error("Page or input changed during native layout capture: " + a.phase + ": " + changed.join(","))
+						var matrix = herdInkView()
+						for (var i = 0; i < matrix.length; i++) if (Math.abs(matrix[i]-a.matrix[i]) > .001) throw new Error("Viewport changed during native layout capture")
+						if (!herdPasteBusy || root.enabled !== false || !sceneView.adjustViewActive || sceneView.strokeHandler.lineTool !== Line.SelectionTool)
+							throw new Error("Native layout input lock unavailable")
+						var locked = false
+						for (var j = 0; j < sceneView.children.length; j++) if (String(sceneView.children[j]).indexOf("PenInputSurface") >= 0) locked = sceneView.children[j].handler === null
+						if (!locked) throw new Error("Native pen routing is not locked")
+						// Native cursor restoration briefly reloads the text surface.
+						// Keep both input locks and every identity/revision/view guard;
+						// One transaction: 30 settling ticks plus one per sampled anchor.
+						if (c.working || sceneView.isLoading) return
+						if (!c.hasRootDocument || c.rootDocumentLength !== a.length) throw new Error("Native text length changed during layout capture")
+						if (a.phase === "locking") {
+							a.phase = a.inactiveCursor ? "focusing" : "reading"
+							if (a.inactiveCursor) a.cursor = 0
+							if (a.inactiveCursor) {
+								console.warn("herdRespond: measuring inactive pen-mode cursor index=-1")
+								c.focusRootDocument(Qt.point(NaN, NaN))
+							} else c.focusRootDocument()
+							if (a.inactiveCursor) return // allow the native root focus to settle first
+							c.setCursorIndex(q.indices[0], SceneController.MoveAnchor)
+							return
+						}
+						if (a.phase === "focusing") {
+							a.phase = "reading"
+							c.setCursorIndex(q.indices[0], SceneController.MoveAnchor)
+							return
+						}
+						if (a.phase === "reading" && c.textCursorIndex === q.indices[a.next]) {
+							if (typeof c.textCursorPosition.x !== "number" || typeof c.textCursorPosition.y !== "number" || typeof c.textLineHeight !== "number" ||
+								!isFinite(c.textCursorPosition.x) || !isFinite(c.textCursorPosition.y) || !isFinite(c.textLineHeight) || c.textLineHeight <= 0) throw new Error("Native layout is invalid")
+							a.first = [c.textCursorPosition.x, c.textCursorPosition.y, c.textLineHeight, c.rootDocumentLength]
+							if (a.multiple) a.samples.push([q.indices[a.next]].concat(a.first))
+							a.next++
+							if (a.next < q.indices.length) {
+								c.setCursorIndex(q.indices[a.next], SceneController.MoveAnchor)
+								return
+							}
+							a.phase = "restoring"
+							c.setCursorIndex(a.cursor, SceneController.MoveAnchor)
+							return
+						}
+						if (a.phase === "restoring" && c.textCursorIndex === a.cursor) herdLayoutCaptureFinish("")
+					} catch (e) { herdLayoutCaptureFinish(String(e)) }
+				}
+				Timer { id: herdLayoutCaptureTimer; interval: 100; repeat: true; onTriggered: herdButton.herdLayoutCaptureTick() }
+				function herdResumeHeld() {
+					if (navigator.herdJob || herdResumeInFlight || !herdPage || herdResumeCheckedPage === herdPage || herdTitle.indexOf("To ") !== 0 || !sceneView.document) return
+					var page = herdPage
+					var doc = navigator.herdUuid(sceneView.document.id)
+					if (!doc || !page) return
+					var path = doc + "/" + page + ".rm"
+					herdResumeInFlight = true
+					navigator.herdHttp("GET", "/answer?page=" + encodeURIComponent(path), null, function(st, r) {
+						herdResumeInFlight = false
+						if (herdPage !== page || !sceneView.document || navigator.herdUuid(sceneView.document.id) !== doc || navigator.herdJob || st !== 200 || !r) return
+						herdResumeCheckedPage = page
+						if (r.state !== "ready" || !r.request || !r.retry_token) return
+						navigator.herdJob = {doc: doc, idx: root.currentPage, page: page, path: path, live: true, request: r.request, lastRetry: r.retry_token}
+						navigator.herdNote = "Recovering held reply…"
+						navigator.herdState = "ready"
+					})
+				}
+				function herdFollowLatest() {
+					herdResumeHeld()
+					if (herdTitle.indexOf("To ") !== 0 || !herdPage || herdFollowedPage === herdPage) { herdOpenTimer.stop(); return }
+					if (herdMine) { herdFollowedPage = herdPage; herdOpenTimer.stop(); return }
+					var c = root.sceneController
+					if (!c) { if (++herdOpenPasses >= 16) herdOpenTimer.stop(); return }
+					if (c.pageId && navigator.herdUuid(c.pageId) !== herdPage) { if (++herdOpenPasses >= 16) herdOpenTimer.stop(); return }
+					var ink = c.itemsBoundingRect
+					var text = c.rootDocumentBoundingRect
+					var bottom = Math.max(ink && ink.height > 0 ? ink.y + ink.height : 0,
+						text && text.height > 0 ? text.y + text.height : 0)
+					if (!isFinite(bottom) || bottom <= 0) { if (++herdOpenPasses >= 16) herdOpenTimer.stop(); return }
+					var end = sceneView.sceneToView(Qt.point(0, bottom))
+					if (end.y > sceneView.height - 300) sceneView.tileManager.moveViewBy(Qt.point(0, sceneView.height - 450 - end.y))
+					herdFollowedPage = herdPage
+					herdOpenTimer.stop()
+				}
+				function herdLayout(work) {
+					herdLater(function() {
+						try {
+							if (!herdMine || herdPage !== work.job.page || navigator.herdJob !== work.job) throw new Error("Return to the original page before writing")
+							var c = root.sceneController
+							if (work.appendIndex !== undefined) {
+								if (c.rootDocumentLength !== work.appendIndex) throw new Error("Caption text changed before append; reply held")
+								if (c.textCursorIndex !== work.appendIndex) {
+									if (++work.focusAttempts > 6) throw new Error("Caption end cursor did not settle; reply held")
+									herdLayout(work); return
+								}
+							}
+							if (work.advanceTo !== undefined) {
+								c.setCursorIndex(work.advanceTo, SceneController.MoveAnchor)
+								delete work.advanceTo
+								herdLayout(work)
+								return
+							}
+							var y = c.textCursorPosition.y
+							if (!isFinite(y)) throw new Error("Native cursor position unavailable")
+							if (c.textCursorIndex < 0 || y <= 0) {
+								if (++work.focusAttempts > 6) throw new Error("Native text cursor did not activate; answer is still held")
+								// A click below the last text block can leave no focused cursor.
+								// Reacquire the document before trying to add any spacing or reply.
+								if (work.nativeGap) {
+									c.focusRootDocument(work.targetPoint)
+									c.setCursorPosition(work.targetPoint, SceneController.MoveAnchor, SceneController.OverscrollAlwaysAllowed)
+								} else {
+									c.focusRootDocument()
+									c.setCursorIndex(c.rootDocumentLength, SceneController.MoveAnchor)
+								}
+								console.warn("herdRespond: recovering native cursor " + work.focusAttempts)
+								herdLayout(work)
+								return
+							}
+							// Native virtual cursors snap to a text line. The insertion
+							// target has clearance already; require the cursor below the
+							// actual ink, not an exact match to the preferred padded point.
+							var minimum = work.nativeGap && work.inkBottom !== undefined ? work.inkBottom : work.target
+							if (y < minimum) {
+								if (work.appendIndex !== undefined) throw new Error("Caption end cursor overlaps the picture; reply held")
+								if (work.nativeGap) {
+									console.warn("herdRespond: native point retry y=" + y + " ink=" + minimum + " target=" + work.target + " preliminary=" + c.hasPreliminaryLineBreaks)
+									if (++work.passes > 6) throw new Error("Native insertion point did not reach the note; answer remains held (cursor=" + y + ", ink=" + minimum + ", target=" + work.target + ")")
+									c.focusRootDocument(work.targetPoint)
+									c.setCursorPosition(work.targetPoint, SceneController.MoveAnchor, SceneController.OverscrollAlwaysAllowed)
+									herdLayout(work); return
+								}
+								if (++work.passes > 25 || work.padding >= 160) throw new Error("Could not place the reply below the handwriting")
+								var count = Math.min(8, Math.max(1, Math.ceil((work.target - y) / Math.max(25, c.textLineHeight || 50))))
+								var gap = ""
+								for (var i = 0; i < count; i++) gap += "\n"
+								work.advanceTo = c.textCursorIndex + gap.length
+								c.replaceText(gap, 0, 0, 0, SceneParticipant.RequestedByInputMethod)
+								work.padding += count
+								herdLayout(work)
+								return
+							}
+							var prefix = work.continuation ? (work.compactInk ? "" : "\n") : "\n" + work.reply.label + "\n"
+							// A leading equation gets a synthetic label-only text block.
+							// Its prefix already ends the label paragraph: do not add
+							// another empty body paragraph before the equation.
+							var labelOnly = work.ordered && !work.continuation && work.reply.text.length === 0
+							var text = prefix + work.reply.text + (labelOnly ? "" : "\n")
+							work.prefixLength = prefix.length
+							work.insertedLength = text.length
+							work.originalLength = c.rootDocumentLength
+							work.styleAppendOnly = c.textCursorIndex === c.rootDocumentLength
+							work.endIndex = work.nativeGap ? -1 : c.textCursorIndex + text.length
+							// Captions/takeaway stay editable native text. Reveal in the
+							// renderer, never ask the answering model for character events.
+							if (work.continuation && (work.job.nativeInkUsed || work.job.nativeLesson) && work.reply.text.length) {
+								herdStartTyping(work, text); return
+							}
+							c.replaceText(text, 0, 0, 0, SceneParticipant.RequestedByInputMethod)
+							console.warn("herdRespond: native text inserted " + work.reply.request + " cursor=" + y + " target=" + work.target + " padding=" + work.padding + " preliminary=" + c.hasPreliminaryLineBreaks)
+							herdLater(function() { herdTextDone(work) })
+						} catch (e) { root.exitTextMode(); navigator.herdFail(0, {error: String(e)}) }
+					})
+				}
+				function herdTypingUnits(text) {
+					// Keep surrogate pairs, combining accents, variation selectors,
+					// emoji modifiers/ZWJ sequences and flag pairs in one reveal.
+					// Unsupported complex-script segmentation uses a whole run below.
+					if (typeof text !== "string" || text.length > 2000) throw new Error("Caption reveal exceeds text budget")
+					var result = [], join = false, regional = 0
+					for (var i = 0; i < text.length;) {
+						var code = text.codePointAt(i), unit = String.fromCodePoint(code)
+						i += unit.length
+						var mark = (code >= 0x300 && code <= 0x36f) || (code >= 0x1ab0 && code <= 0x1aff) ||
+							(code >= 0x1dc0 && code <= 0x1dff) || (code >= 0x20d0 && code <= 0x20ff) ||
+							(code >= 0xfe00 && code <= 0xfe0f) || (code >= 0xfe20 && code <= 0xfe2f) ||
+							(code >= 0x1f3fb && code <= 0x1f3ff) || (code >= 0xe0100 && code <= 0xe01ef)
+						var flag = code >= 0x1f1e6 && code <= 0x1f1ff
+						// Joining scripts need a shaping-aware segmenter. Preserve their
+						// complete run instead of exposing broken clusters/ligatures.
+						if ((code >= 0x590 && code <= 0x1cff) || (code >= 0xa800 && code <= 0xabff)) return [text]
+						if (result.length && (mark || join || code === 0x200d || (flag && regional % 2))) result[result.length-1] += unit
+						else result.push(unit)
+						join = code === 0x200d
+						regional = flag ? regional+1 : 0
+					}
+					return result
+				}
+				function herdStartTyping(work, text) {
+					if (herdTyping) throw new Error("Caption reveal is already active")
+					var c = root.sceneController, units = herdTypingUnits(text)
+					if (!units.length) throw new Error("Caption reveal is empty")
+					if (typeof work.onTextSettled === "function" &&
+						(c.textCursorIndex !== c.rootDocumentLength || !isFinite(c.rootDocumentLength) || c.rootDocumentLength < 0 ||
+							(work.prefixLength !== undefined && (typeof work.prefixLength !== "number" ||
+								work.prefixLength % 1 !== 0 || work.prefixLength < 0 || work.prefixLength > text.length))))
+						throw new Error("Streamed answer requires an exact end-of-document cursor and prefix")
+					var a = {work:work, controller:c, surface:herdContextSurface, ink:herdContextInk,
+						units:units, next:0, pending:null, initial:true, stable:0, sampled:-1,
+						initialLength:c.rootDocumentLength, acknowledged:0, firstAnswerAt:null,
+						length:c.rootDocumentLength, cursor:c.textCursorIndex,
+						progressDeadline:Date.now()+10000,
+						deadline:Date.now()+Math.max(30000,15000+units.length*300)}
+					herdTyping = a
+					herdTypingTimer.restart()
+				}
+				function herdStopTyping(error) {
+					var a = herdTyping
+					herdTypingTimer.stop(); herdTyping = null
+					if (!a) return
+					if (error) { root.exitTextMode(); navigator.herdFail(0, {error:error}); return }
+					// The initial virtual paragraph may materialize extra line breaks.
+					// All later characters were append-only; final styling uses the
+					// same full inserted string length as the old block insertion.
+					a.work.endIndex = a.controller.rootDocumentLength
+					if (typeof a.work.onTextSettled !== "function") {
+						herdLater(function() { herdTextDone(a.work) }); return
+					}
+					// A streaming opening is not a completed visual reply. Its owner
+					// receives only the observed append range; no final-save ACK here.
+					// Never adopt intervening edits while this callback is queued.
+					a.completedRevision = herdContextRevision
+					a.completedAt = Date.now()
+					herdLater(function() { herdTypingCompleted(a) })
+				}
+				function herdTypingCompleted(a) {
+					if (a.completionDelivered) return
+					a.completionDelivered = true // failed callbacks are never replayed
+					try {
+						var c = root.sceneController
+						if (!herdMine || herdPage !== a.work.job.page || navigator.herdJob !== a.work.job ||
+							navigator.herdState !== "writing" || c !== a.controller || herdContextSurface !== a.surface ||
+							herdContextInk !== a.ink || herdContextRevision !== a.completedRevision ||
+							root.inSuspend || sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500 ||
+							c.hasTextSelection || c.selectionItemCount || c.working || sceneView.isLoading ||
+							c.rootDocumentLength !== a.length || c.textCursorIndex !== a.length)
+							throw new Error("Caption incomplete: page or input changed before append acknowledgement")
+						var gap = a.length - a.initialLength - a.acknowledged
+						if (gap < 0 || gap > (a.work.nativeGap ? 160 : 0)) throw new Error("Caption append range is inconsistent")
+						a.work.onTextSettled({start:a.length-a.acknowledged, end:a.length,
+							characters:a.acknowledged, gap:gap, firstAnswerAt:a.firstAnswerAt,
+							completedAt:a.completedAt, surface:a.surface, revision:a.completedRevision, ink:a.ink})
+					} catch (e) { root.exitTextMode(); navigator.herdFail(0, {error:String(e)}) }
+				}
+				function herdTypingTick() {
+					var a = herdTyping
+					if (!a) { herdTypingTimer.stop(); return }
+					try {
+						var c = root.sceneController
+						if (!herdMine || herdPage !== a.work.job.page || navigator.herdJob !== a.work.job ||
+							navigator.herdState !== "writing" || c !== a.controller || herdContextSurface !== a.surface ||
+							herdContextInk !== a.ink || root.inSuspend || sceneView.penClose ||
+							sceneView.strokeHandler.timeSincePenUp() < 1500 || c.hasTextSelection || c.selectionItemCount)
+							throw new Error("Caption incomplete: page or input changed; partial text kept, no automatic resume")
+						if (Date.now() > a.deadline || Date.now() > a.progressDeadline)
+							throw new Error("Caption incomplete: text stopped advancing; partial text kept, inspect before retrying")
+						// SceneView.isLoading includes controller.working and pending
+						// tiles after our own append; it is not proof of page change.
+						// Identity/pen guards above still run while waiting, and the
+						// no-progress deadline is never extended by this busy state.
+						if (c.working || sceneView.isLoading) return
+						var length = c.rootDocumentLength
+						if (a.pending !== null) {
+							var expected = a.length+a.pending.length
+							if (length === a.length) return // native insertion is asynchronous
+							if (length !== expected && !(a.initial && a.work.nativeGap && length > expected && length <= expected+160))
+								throw new Error("Caption text changed during reveal; reply held")
+							// replaceText(..., cursor=0, ...) leaves the native cursor at
+							// the inserted unit's START. Virtual gap materialization moves
+							// that start beyond the old cursor (live: 23 -> 30, length31).
+							// Explicitly advance AFTER the unit before issuing another.
+							var virtualStart = a.initial && a.work.nativeGap && length > expected && c.textCursorIndex === length-a.pending.length
+							var nextCursor = length
+							if (c.textCursorIndex !== a.cursor && c.textCursorIndex !== nextCursor && !virtualStart)
+								throw new Error("Caption cursor changed during insertion; reply held (before=" + a.cursor + ", now=" + c.textCursorIndex + ", lengthBefore=" + a.length + ", lengthNow=" + length + ", unitLength=" + a.pending.length + ", initial=" + a.initial + ", gap=" + a.work.nativeGap + ")")
+							if (a.initial && a.sampled !== length) { a.sampled = length; return }
+							// This is native acknowledgement time, not optical e-ink
+							// proof. Exclude the agent label and leading whitespace.
+							var prefixRemaining = Math.max(0, (a.work.prefixLength || 0)-a.acknowledged)
+							if (a.firstAnswerAt === null && /\S/.test(a.pending.slice(prefixRemaining))) a.firstAnswerAt = Date.now()
+							a.acknowledged += a.pending.length
+							a.initial = false; a.pending = null; a.length = length; a.cursor = nextCursor
+							// Only an acknowledged native append counts as progress.
+							// Timer ticks, busy flags and cursor retries do not extend it.
+							a.progressDeadline = Date.now()+10000
+							c.setCursorIndex(nextCursor, SceneController.MoveAnchor)
+						}
+						if (length !== a.length) throw new Error("Caption length changed before next character; reply held")
+						if (c.textCursorIndex !== a.cursor) {
+							if (++a.stable > 25) throw new Error("Caption cursor moved; reply held")
+							return
+						}
+						a.stable = 0
+						var p = sceneView.sceneToView(c.textCursorPosition)
+						if (p.y > sceneView.height-250) sceneView.tileManager.moveViewBy(Qt.point(0,sceneView.height-350-p.y))
+						if (a.next >= a.units.length) { herdStopTyping(); return }
+						// Mark pending BEFORE mutation: errors never replay a character.
+						a.pending = a.units[a.next++]
+						c.replaceText(a.pending, 0, 0, 0, SceneParticipant.RequestedByInputMethod)
+					} catch (e) { herdStopTyping(String(e)) }
+				}
+				property var herdTyping: null
+				Timer { id: herdTypingTimer; interval: 31; repeat: true; onTriggered: herdButton.herdTypingTick() }
+				function herdStyle(work) {
+					var styles = work.reply.styles || []
+					if (work.stylesDone || styles.length === 0) return false
+					var c = root.sceneController
+					// Never style guessed indices in existing content. The initial
+					// insertion must have been at the native document's end.
+					if (!work.styleAppendOnly || typeof c.cycleParagraphStyle !== "function") {
+						work.stylesDone = true
+						console.warn("herdRespond: retaining plain text; safe style range unavailable")
+						return false
+					}
+					if (!work.styleQueue) {
+						var start = c.rootDocumentLength - work.insertedLength
+						if (!isFinite(start) || start < work.originalLength) throw new Error("Native reply style bounds unavailable")
+						var lines = work.reply.text.split("\n")
+						var offsets = [], offset = start + (work.prefixLength === undefined ? work.reply.label.length + 2 : work.prefixLength)
+						for (var i = 0; i < lines.length; i++) { offsets.push(offset); offset += lines[i].length + 1 }
+						var queue = work.continuation ? [] : [{index: start + 1, type: ParagraphStyle.Type.Subheading2}]
+						for (var s = 0; s < styles.length && s < 8; s++) {
+							var paragraph = styles[s].paragraph
+							if (styles[s].style !== "subheading" || typeof paragraph !== "number" || Math.floor(paragraph) !== paragraph || paragraph < 0 || paragraph >= lines.length || !lines[paragraph].trim()) throw new Error("Invalid notebook paragraph style")
+							queue.push({index: offsets[paragraph], type: ParagraphStyle.Type.Subheading2})
+						}
+						queue.push({index: c.rootDocumentLength, type: ParagraphStyle.Type.Paragraph})
+						work.styleQueue = queue
+					}
+					if (work.styleQueue.length === 0) { work.stylesDone = true; return false }
+					var next = work.styleQueue[0]
+					if (work.styleTarget !== next.index) {
+						work.styleTarget = next.index
+						work.styleWaits = 0
+						c.setCursorIndex(next.index, SceneController.MoveAnchor)
+						herdLater(function() { herdTextDone(work) })
+						return true
+					}
+					// Cursor changes are asynchronous. Wait before styling so the
+					// preceding (possibly pre-existing) paragraph cannot be changed.
+					if (c.textCursorIndex !== next.index) {
+						if (++work.styleWaits > 6) throw new Error("Native paragraph cursor did not settle")
+						herdLater(function() { herdTextDone(work) })
+						return true
+					}
+					var selected = c.textParagraphStyle
+					if (!selected || !selected.matchesButtonStyle(next.type)) c.cycleParagraphStyle(next.type)
+					work.styleQueue.shift()
+					delete work.styleTarget
+					herdLater(function() { herdTextDone(work) })
+					return true
+				}
+				function herdImageObservation(work, phase) {
+					// Temporary, bounded timing evidence for the native image API.
+					// Read only: never treat counts/bounds as insertion or save proof.
+					// Do not log URLs, asset paths, page text, or returned native objects.
+					try {
+						var c = root.sceneController, b = c.itemsBoundingRect
+						function number(value) { return typeof value === "number" && isFinite(value) ? value : null }
+						var state = JSON.stringify([c.working === true, number(c.itemCount),
+							number(c.selectionItemCount), c.selectionContainsImage === true,
+							b ? [number(b.x), number(b.y), number(b.width), number(b.height)] : null])
+						if (phase === "before") work.imageObserveStart = Date.now()
+						if (phase === "poll" && state === work.imageObserveState) return
+						work.imageObserveState = state
+						console.warn("herdRespond: image observation phase=" + phase + " elapsed=" +
+							Math.max(0, Date.now()-work.imageObserveStart) + " state=" + state)
+					} catch (e) {} // An unavailable diagnostic must not change delivery.
+				}
+				function herdImageGeometry(work, block, x, top) {
+					// Only native lesson continuations opt in. This is an insertion
+					// sequencing check, NEVER saved-image/pixel or preservation proof.
+					if (!work.job.nativeInkUsed) return null
+					var c = root.sceneController, b = c.itemsBoundingRect
+					if (!b || [b.x,b.y,b.width,b.height,x,top,block.width,block.height].some(function(n) {
+						return typeof n !== "number" || !isFinite(n)
+					}) || b.width < 0 || b.height < 0 || block.width <= 0 || block.height <= 0 ||
+						top <= b.y+b.height+1) return null
+					var left = Math.min(b.x, x), right = Math.max(b.x+b.width, x+block.width)
+					return {controller:c, surface:herdContextSurface, ink:herdContextInk,
+						textBottom:work.blockTextBottom, expected:[left,b.y,right-left,top+block.height-b.y], samples:0}
+				}
+				function herdImageGeometryReady(work) {
+					var g = work.blockImageGeometry
+					if (!g) return false
+					var c = root.sceneController
+					if (c !== g.controller || herdContextSurface !== g.surface || herdContextInk !== g.ink ||
+						root.inSuspend || sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500)
+						throw new Error("Page or pen changed during native image insertion; reply held")
+					var text = c.rootDocumentBoundingRect
+					if (!text || text.y+text.height !== g.textBottom) throw new Error("Text changed during native image insertion; reply held")
+					var b = c.itemsBoundingRect
+					if (c.working || sceneView.isLoading || !b || [b.x,b.y,b.width,b.height].some(function(n,i) {
+						return typeof n !== "number" || !isFinite(n) || Math.abs(n-g.expected[i]) > 0.5
+					})) { g.samples = 0; return false }
+					// Before/returned bounds were unchanged in live integral07;
+					// the expected union appeared asynchronously at386ms. Require
+					// two separate timer samples before placing text below it.
+					return ++g.samples >= 2
+				}
+				function herdOrdered(work) {
+					if (!work.ordered || work.orderedDone) return false
+					var c = root.sceneController
+					if (work.blockNext >= work.ordered.length) {
+						work.orderedDone = true
+						work.mediaIndex = (work.reply.media || []).length
+						return false
+					}
+					var block = work.ordered[work.blockNext]
+					var bounds = c.rootDocumentBoundingRect
+					if (!bounds || !isFinite(bounds.y) || !isFinite(bounds.height) || bounds.height <= 0) throw new Error("Ordered reply text bounds unavailable")
+					var textBottom = bounds.y + bounds.height
+					if (block.kind === "text") {
+						var bottom = Math.max(textBottom, work.mediaBottom || 0)
+						var compactInk = !!(work.job.nativeInkUsed || work.job.nativeLesson)
+						// Later stages add to the SAME picture above existing captions.
+						// Reusing a point below all text creates another virtual blank
+						// paragraph every time. Append at the settled end only when a
+						// full native line already clears the picture. This also keeps
+						// the first caption beside its settled agent label, before ink
+						// playback starts. Text below a new image keeps the gap path.
+						if (compactInk && isFinite(c.textLineHeight) && c.textLineHeight > 0 &&
+							textBottom - c.textLineHeight >= (work.mediaBottom || 0) + 30) {
+							var appendIndex = c.rootDocumentLength
+							root.enterTextMode(true)
+							c.focusRootDocument()
+							c.setCursorIndex(appendIndex, SceneController.MoveAnchor)
+							herdLayout({job: work.job, reply: {request: work.reply.request, label: work.reply.label, text: block.text, styles: block.styles || [], media: work.reply.media},
+								ordered: work.ordered, blockNext: work.blockNext + 1, continuation: true, mediaBottom: work.mediaBottom,
+								compactInk: true, appendIndex: appendIndex, target: (work.mediaBottom || 0) + 30,
+								nativeGap: false, padding: 0, passes: 0, focusAttempts: 0})
+							return true
+						}
+						var point = Qt.point(bounds.x, bottom + (compactInk ? 30 : Math.max(30, c.textLineHeight || 50)))
+						root.enterTextMode(true, point)
+						c.focusRootDocument(point)
+						c.setCursorPosition(point, SceneController.MoveAnchor, SceneController.OverscrollAlwaysAllowed)
+						herdLayout({job: work.job, reply: {request: work.reply.request, label: work.reply.label, text: block.text, styles: block.styles || [], media: work.reply.media},
+							ordered: work.ordered, blockNext: work.blockNext + 1, continuation: true, mediaBottom: work.mediaBottom,
+							compactInk: compactInk,
+							target: point.y, inkBottom: bottom, targetPoint: point, nativeGap: true, padding: 0, passes: 0, focusAttempts: 0})
+						return true
+					}
+					if (block.kind === "ink") {
+						if (!herdInk) herdBeginInk(work, block, bounds)
+						return true
+					}
+					if (block.kind !== "media") throw new Error("Unknown ordered notebook block")
+					if (!work.blockImageRequested) {
+						if (work.blockTextBottom !== textBottom) {
+							work.blockTextBottom = textBottom
+							work.blockBoundsWaits = (work.blockBoundsWaits || 0) + 1
+							if (work.blockBoundsWaits > 12) throw new Error("Ordered text layout did not settle")
+							herdLater(function() { herdTextDone(work) }); return true
+						}
+						var top = Math.max(textBottom, work.mediaBottom || 0) + 30
+						work.blockImageGeometry = herdImageGeometry(work, block, bounds.x, top)
+						work.blockImageRequested = true // Never reinsert on a delayed callback.
+						herdImageObservation(work, "before")
+						c.insertImageFileAsSceneItem(block.url, Qt.point(bounds.x + block.width / 2, top + block.height / 2))
+						herdImageObservation(work, "returned")
+						work.mediaBottom = top + block.height + 30
+						work.blockProofWaits = 0
+						root.exitTextMode()
+						var viewBottom = sceneView.sceneToView(Qt.point(0, work.mediaBottom))
+						if (viewBottom.y > sceneView.height - 300) sceneView.tileManager.moveViewBy(Qt.point(0, sceneView.height - 450 - viewBottom.y))
+						herdLater(function() { herdTextDone(work) }); return true
+					}
+					if (herdImageGeometryReady(work)) {
+						herdImageObservation(work, "laid-out")
+						work.blockNext++
+						delete work.blockImageRequested
+						delete work.blockTextBottom
+						delete work.blockImageGeometry
+						work.blockBoundsWaits = 0
+						// Final herdTextDone still requires saved pixels/page reference
+						// for ALL images, then ink proof, then server final ACK.
+						herdLater(function() { herdTextDone(work) }); return true
+					}
+					if (work.blockImageGeometry && work.blockImageGeometry.samples === 1) {
+						herdLater(function() { herdTextDone(work) }); return true
+					}
+					// Unknown/non-extending geometry retains the saved-pixels gate.
+					// pendingEdit is a transform, NOT an insertion-complete flag.
+					herdImageObservation(work, "poll")
+					navigator.herdHttp("POST", "/notebook-media-proof", {page: work.job.path, request: work.reply.request, assets: [block.asset]}, function(st, r) {
+						if (!herdMine || herdPage !== work.job.page || navigator.herdJob !== work.job) return
+						if (st !== 200) { navigator.herdFail(st, r); return }
+						if (r.state === "persisted") {
+							herdImageObservation(work, "persisted")
+							work.blockNext++
+							delete work.blockImageRequested
+							delete work.blockTextBottom
+							delete work.blockImageGeometry
+							work.blockBoundsWaits = 0
+						} else if (++work.blockProofWaits > 30) {
+							navigator.herdFail(0, {error: "Ordered image save not confirmed; inspect before retrying"}); return
+						}
+						herdLater(function() { herdTextDone(work) })
+					})
+					return true
+				}
+				function herdInkView() {
+					var p = sceneView.viewToScene(Qt.point(0, 0))
+					var px = sceneView.viewToScene(Qt.point(1, 0))
+					var py = sceneView.viewToScene(Qt.point(0, 1))
+					return [px.x-p.x, px.y-p.y, py.x-p.x, py.y-p.y, p.x, p.y]
+				}
+				function herdBeginInk(work, block, bounds) {
+					if (herdPasteBusy || herdProbeJob || root.inSuspend) throw new Error("Native drawing surface is busy")
+					var playback = block.playback ? herdPlaybackProgram(block) : null
+					// Server-built disjoint atlas rows, never model-selected source regions.
+					if (block.reveal !== undefined) {
+						if (!Array.isArray(block.reveal) || block.reveal.length < 1 || block.reveal.length > 4) throw new Error("Invalid native reveal rows")
+						var totalStrokes = 0, totalPoints = 0
+						for (var ri = 0; ri < block.reveal.length; ri++) {
+							var row = block.reveal[ri], dy = ri*(block.height+40)
+							if (!row || !Array.isArray(row.offset) || !Array.isArray(row.rect) || !Array.isArray(row.bounds) ||
+								row.offset.length !== 2 || row.rect.length !== 4 || row.bounds.length !== 4 ||
+								row.offset[0] !== 0 || row.offset[1] !== dy || row.rect[0] !== -10 || row.rect[1] !== dy-10 ||
+								row.rect[2] !== block.width+20 || row.rect[3] !== block.height+20 ||
+								!Number.isInteger(row.stroke_count) || row.stroke_count < 1 || row.stroke_count > 64 ||
+								!Number.isInteger(row.point_count) || row.point_count < 2 || row.point_count > 3000 ||
+								row.bounds.some(function(n) { return typeof n !== "number" || !isFinite(n) }) ||
+								!(0 <= row.bounds[0] && row.bounds[0] <= row.bounds[2] && row.bounds[2] <= block.width &&
+								  0 <= row.bounds[1] && row.bounds[1] <= row.bounds[3] && row.bounds[3] <= block.height)) throw new Error("Invalid native reveal geometry")
+							totalStrokes += row.stroke_count; totalPoints += row.point_count
+						}
+						if (totalStrokes !== block.stroke_count || totalPoints !== block.point_count || totalStrokes > 64 || totalPoints > 3000) throw new Error("Native reveal counts changed")
+					}
+					var source = Library.entryForId(block.source_doc)
+					if (!source) {
+						// Fresh lesson metadata may still be entering the native library.
+						// Wait before any clone/claim; never repeat an insertion to recover.
+						work.blockSourceWaits = (work.blockSourceWaits || 0) + 1
+						if (work.blockSourceWaits > 30) throw new Error("Native drawing source is not loaded in the library")
+						herdLater(function() { herdTextDone(work) })
+						return
+					}
+					delete work.blockSourceWaits
+					var plots = work.job.nativePlots || {}
+					var origin = plots[block.scene]
+					if (!origin) {
+						if (block.stage_index !== 0) throw new Error("Native drawing must start at its first stage")
+						var gap = block.role === "hand" ? 0 : 30
+						origin = [bounds.x, work.job.blankProse ? (work.mediaBottom ? work.mediaBottom+gap : work.job.inkFloor)
+							: Math.max(bounds.y+bounds.height, work.mediaBottom || 0)+30]
+						if (block.width > bounds.width) {
+							// Wider than the typed column (handwriting): centred on it, kept inside safe paper.
+							origin[0] = Math.min(Math.max(bounds.x-(block.width-bounds.width)/2, sceneView.viewToScene(Qt.point(132, 0)).x),
+								sceneView.viewToScene(Qt.point(sceneView.width-102, 0)).x-block.width)
+						}
+						plots[block.scene] = origin
+						work.job.nativePlots = plots
+					}
+					var v = herdAssetScene.createObject(herdButton, {document: source, pageId: block.source_page})
+					if (!v) throw new Error("Native drawing source could not be opened")
+					herdInk = {work: work, block: block, origin: origin, view: v, phase: "loading", passes: 0,
+						doc: navigator.herdUuid(sceneView.document.id), page: herdPage, surface: herdContextSurface,
+						ink: herdContextInk, controller: root.sceneController, ownsLock: false, chunk: 0, sourceGone: 0, playbackProgram: playback}
+					herdInkTimer.restart()
+				}
+				function herdInkGuard(locked, unchanged) {
+					var a = herdInk
+					if (!a || navigator.herdJob !== a.work.job || !herdMine || root.inSuspend ||
+						herdPage !== a.page || herdContextSurface !== a.surface || !sceneView.document ||
+						navigator.herdUuid(sceneView.document.id) !== a.doc || root.sceneController !== a.controller ||
+						herdContextInk !== a.ink || sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500) return false
+					if (!locked) return true
+					if (!a.ownsLock || !herdPasteBusy || root.enabled !== false || !sceneView.adjustViewActive ||
+						sceneView.strokeHandler.lineTool !== Line.SelectionTool) return false
+					if (unchanged && herdContextRevision !== a.revision) return false
+					var matrix = herdInkView()
+					for (var j = 0; j < matrix.length; j++) if (Math.abs(matrix[j]-a.matrix[j]) > .001) return false
+					for (var i = 0; i < sceneView.children.length; i++) {
+						var child = sceneView.children[i]
+						if (String(child).indexOf("PenInputSurface") >= 0) return child.handler === null
+					}
+					return false
+				}
+				function herdInkFinish(error) {
+					var a = herdInk
+					herdInkTimer.stop()
+					if (!a) return
+					if (a.playbackProgram) herdPlaybackStop()
+					herdInk = null
+					if (a.ownsLock) herdPasteBusy = false
+					if (a.view) a.view.destroy()
+					if (error) { navigator.herdFail(0, {error: error}); return }
+					// Only a completed, standalone equation or handwriting region may release
+					// unused canvas below its ink. Growing pictures keep their entire reserved region.
+					// Playback still clips/validates/pastes the full original canvas;
+					// this affects the following text only, after native commit succeeds.
+					var height = a.block.height
+					if ((a.block.role === "equation" || a.block.role === "hand") && a.block.stage_index === 0 && a.block.stage_count === 1 &&
+						a.playbackProgram && typeof a.playbackProgram.bottom === "number" &&
+						isFinite(a.playbackProgram.bottom) && a.playbackProgram.bottom > 0 && a.playbackProgram.bottom <= height)
+						height = Math.ceil(a.playbackProgram.bottom)
+					// Handwriting regions run on at the line pitch, so a passage split across regions reads as one.
+					a.work.mediaBottom = Math.max(a.work.mediaBottom || 0, a.origin[1]+height+(a.block.role === "hand" ? 10 : 30))
+					a.work.job.nativeInkUsed = true
+					a.work.blockNext++
+					herdLater(function() { herdTextDone(a.work) })
+				}
+				function herdInkTick() {
+					var a = herdInk
+					if (!a) { herdInkTimer.stop(); return }
+					try {
+						if (++a.passes > 250 + (a.playbackProgram ? Math.ceil(a.playbackProgram.duration/100) : 0)) throw new Error("Native drawing timed out; inspect before retrying")
+						if (!herdInkGuard(a.ownsLock, a.phase === "locking" || a.phase === "claiming")) throw new Error("Native drawing page or input changed; reply held")
+						var v = a.view, c = a.controller, b = a.block
+						var part = b.reveal ? b.reveal[a.chunk] : b
+						var rect = b.reveal ? part.rect : [-10, -10, b.width+20, b.height+20]  // the whole block, as a reveal row is
+						// A destroyed controller reads as null. The destination's is fatal; the hidden source view's can be
+						// replaced while it reloads (5fdba26e, 2026-10-30): wait for it, then select the chunk again.
+						if (!c) throw new Error("Native destination page closed; reply held")
+						// Only selecting reads the source; after a paste it may unload unseen (673a2723).
+						if ((a.phase === "selecting" || a.phase === "selecting-next") && !v.controller) {
+							if (++a.sourceGone <= 30) return
+							// Its document worker can exit for good mid-selection (3 times on 2026-10-30): open the source
+							// afresh, at most twice, and select the chunk again. Nothing is pasted until then.
+							if (a.reopened >= 2) throw new Error("Native drawing source closed; inspect before retrying")
+							a.reopened = (a.reopened || 0)+1; a.sourceGone = 0; a.source = null
+							console.log("herdRespond: native source closed; reopening it for chunk", a.chunk)
+							v.destroy()
+							a.view = herdAssetScene.createObject(herdButton, {document: Library.entryForId(b.source_doc), pageId: b.source_page})
+							if (!a.view) throw new Error("Native drawing source could not be opened")
+							return
+						}
+						a.sourceGone = 0
+						if ((a.phase === "selecting" || a.phase === "selecting-next") && v.controller !== a.source) {
+							if (v.controller.working || v.status !== SceneView.Active || v.pageStatus !== Page.Ready) return
+							console.log("herdRespond: native source reloaded; selecting chunk", a.chunk, "again")
+							a.source = v.controller
+							v.controller.addSelectionRect(Qt.rect(rect[0], rect[1], rect[2], rect[3]), SceneController.InitalSelection)
+							return
+						}
+						if (a.phase === "loading" && v.status === SceneView.Active && v.pageStatus === Page.Ready && v.controller && !v.controller.working) {
+							a.phase = "selecting"; a.source = v.controller
+							v.controller.addSelectionRect(Qt.rect(rect[0], rect[1], rect[2], rect[3]), SceneController.InitalSelection)
+						} else if ((a.phase === "selecting" || a.phase === "selecting-next") && !v.controller.working && v.controller.selectionItemCount === part.stroke_count) {
+							a.items = v.controller.cloneSelectedItems(v.controller.currentLayer, 1)
+							if (!a.items || (typeof a.items.length === "number" && a.items.length !== part.stroke_count)) throw new Error("Native source clone count mismatch")
+							if (a.phase === "selecting-next") {
+								if (c.working || c.selectionItemCount !== 0 || sceneView.itemSelectionMode) throw new Error("Native reveal destination still editing")
+								a.phase = "pasting" // same claimed stage; each chunk dispatched once
+								c.cloneAddAndSelectItems(c.currentLayer, a.items, 1, Qt.point(a.origin[0]+(part.bounds[0]+part.bounds[2])/2, a.origin[1]+(part.bounds[1]+part.bounds[3])/2))
+								return
+							}
+							root.exitTextMode()
+							if (b.stage_index === 0 || a.playbackProgram) {
+								var top = sceneView.sceneToView(Qt.point(a.origin[0], a.origin[1]))
+								var bottom = sceneView.sceneToView(Qt.point(a.origin[0]+b.width, a.origin[1]+b.height))
+								if (top.y < 230 || bottom.y > sceneView.height-110) sceneView.tileManager.moveViewBy(Qt.point(0, 500-top.y))
+							}
+							a.phase = "settling"; a.settle = 0
+						} else if (a.phase === "settling" && !c.working && ++a.settle >= 8) {
+							if (c.selectionItemCount !== 0 || c.hasTextSelection || sceneView.adjustViewActive) throw new Error("Native destination has an active edit")
+							herdReportContext()
+							a.matrix = herdInkView(); a.revision = herdContextRevision
+							a.phase = "locking"; a.lockPasses = 0; a.ownsLock = true; herdPasteBusy = true
+						} else if (a.phase === "locking" && !c.working && ++a.lockPasses >= 5 && !herdContextBusy) {
+							if (c.selectionItemCount !== 0) throw new Error("Native destination selection changed")
+							a.phase = "claiming"
+							navigator.herdHttp("POST", "/native-ink-claim", {request: a.work.reply.request, page: a.work.job.path,
+								scene: b.scene, stage: b.stage, surface: a.surface, revision: a.revision, ink_revision: a.ink,
+								origin: a.origin, ui_locked: true}, function(st, r) {
+								if (herdInk !== a || a.phase !== "claiming") return
+								if (st !== 200 || !r || !r.claimed || r.request !== a.work.reply.request || r.scene !== b.scene || r.stage !== b.stage) { herdInkFinish("Native drawing claim refused; no automatic replay"); return }
+								if (!herdInkGuard(true, true)) { herdInkFinish("Native drawing changed after claim; no automatic replay"); return }
+								a.phase = "pasting" // durable claim BEFORE one dispatch
+								try {
+									if (a.playbackProgram) herdPlaybackStart(a)
+									else c.cloneAddAndSelectItems(c.currentLayer, a.items, 1, Qt.point(a.origin[0]+(part.bounds[0]+part.bounds[2])/2, a.origin[1]+(part.bounds[1]+part.bounds[3])/2))
+								}
+								catch (e) { herdInkFinish("Native drawing paste failed; inspect before retrying") }
+							})
+						} else if (a.phase === "pasting" && !c.working && c.selectionItemCount === part.stroke_count && sceneView.itemSelectionMode) {
+							a.phase = "committing"; sceneView.endItemSelection()
+						} else if (a.phase === "committing" && !c.working && c.selectionItemCount === 0 && !sceneView.itemSelectionMode) {
+							if (b.reveal && a.chunk+1 < b.reveal.length) {
+								a.chunk++; a.items = null; a.phase = "selecting-next"
+								var nextRect = b.reveal[a.chunk].rect
+								a.source = v.controller  // null: selected when the source view is back
+								if (v.controller) {
+									v.controller.clearSelectedItems()
+									v.controller.addSelectionRect(Qt.rect(nextRect[0], nextRect[1], nextRect[2], nextRect[3]), SceneController.InitalSelection)
+								}
+								return // no unlock, new claim, caption or ACK between chunks
+							}
+							a.phase = "acknowledging"; a.ackTries = a.ackTries || 0
+							navigator.herdHttp("POST", "/native-ink-done", {request: a.work.reply.request, scene: b.scene, stage: b.stage}, function(st, r) {
+								if (herdInk !== a) return
+								if (st !== 200 || !r || !r.accepted) {
+									console.log("herdRespond: native ink ACK", st, r && r.error ? r.error : "", "try", (a.ackTries || 0) + 1)
+									// The ACK is idempotent: a lost one (ae12839f, status 0) is sent again on the next ticks.
+									if ((st === 0 || st >= 500) && ++a.ackTries < 4) { a.phase = "committing"; return }
+									herdInkFinish("Native drawing commit acknowledgement failed; inspect before retrying"); return
+								}
+								herdInkFinish(null)
+							})
+						}
+					} catch (e) {
+						console.log("herdRespond: native ink stopped in", a.phase, "chunk", a.chunk, "source", !!(a.view && a.view.controller), "destination", !!a.controller)
+						herdInkFinish(String(e))
+					}
+				}
+				Timer { id: herdInkTimer; interval: 100; repeat: true; onTriggered: herdButton.herdInkTick() }
+				// A step of a block every 100 ms. The settle, lock, source-wait and timeout counts in herdInkTick keep the
+				// wall-clock lengths they had at 250 ms; only the wait between steps is shorter.
+				// Display-only playback. Physical pen routing stays locked throughout;
+				// the same ordinary native asset is pasted once after the final paint.
+				// Server operator rollout must explicitly opt in; capability alone is insufficient.
+				function herdPlaybackProgram(block) {
+					var p = block.playback
+					if (!Number.isInteger(block.width) || !Number.isInteger(block.height) || block.width < 320 || block.width > 1140 ||
+						block.height < 200 || block.height > 500 || !Number.isInteger(block.point_count) ||
+						!p || block.reveal || p.version !== 1 || !Array.isArray(p.paths) || p.paths.length !== block.stroke_count ||
+						p.paths.length < 1 || p.paths.length > (block.role === "hand" ? 192 : 64) || typeof p.velocity !== "number" || !isFinite(p.velocity) ||
+						p.velocity < 50 || p.velocity > 2000 || !Number.isInteger(p.pen_up_ms) || p.pen_up_ms < 10 || p.pen_up_ms > 35 ||
+						!Number.isInteger(p.minimum_stroke_ms) || p.minimum_stroke_ms < 10 || p.minimum_stroke_ms > 25)
+						throw new Error("Invalid native stroke playback")
+					var paths = [], points = 0, elapsed = 0, bottom = 0
+					for (var i = 0; i < p.paths.length; i++) {
+						var input = p.paths[i], path = [], cumulative = [0], length = 0
+						if (!Array.isArray(input) || input.length < 2 || input.length > 3000) throw new Error("Invalid playback path")
+						for (var j = 0; j < input.length; j++) {
+							var q = input[j]
+							if (!Array.isArray(q) || q.length !== 2 || q.some(function(n) { return typeof n !== "number" || !isFinite(n) }) ||
+								q[0] < 0 || q[0] > block.width || q[1] < 0 || q[1] > block.height) throw new Error("Playback left reserved region")
+							if (j) { var dx = q[0]-input[j-1][0], dy = q[1]-input[j-1][1]; length += Math.sqrt(dx*dx+dy*dy); cumulative.push(length) }
+							path.push([q[0],q[1]]); bottom = Math.max(bottom, q[1])
+						}
+						points += path.length
+						if (points > 3000) throw new Error("Playback point budget exceeded")
+						var duration = Math.max(p.minimum_stroke_ms, 1000*length/p.velocity)
+						paths.push({path:path, cumulative:cumulative, length:length, start:elapsed, duration:duration})
+						elapsed += duration + (i+1 < p.paths.length ? p.pen_up_ms : 0)
+					}
+					if (points !== block.point_count || elapsed > 30000 || typeof p.duration_ms !== "number" ||
+						!isFinite(p.duration_ms) || Math.abs(elapsed-p.duration_ms) > .01) throw new Error("Playback timing/count mismatch")
+					return {paths:paths, duration:elapsed, bottom:bottom}
+				}
+				function herdPlaybackFrame(program, elapsed) {
+					var result = []
+					for (var i = 0; i < program.paths.length; i++) {
+						var stroke = program.paths[i]
+						if (elapsed < stroke.start) break
+						if (elapsed >= stroke.start+stroke.duration) { result.push(stroke.path); continue }
+						var distance = stroke.length*(elapsed-stroke.start)/stroke.duration, path = [stroke.path[0]]
+						for (var j = 1; j < stroke.path.length; j++) {
+							var end = stroke.cumulative[j], begin = stroke.cumulative[j-1]
+							if (end <= distance) { path.push(stroke.path[j]); continue }
+							var t = (distance-begin)/(end-begin), a = stroke.path[j-1], b = stroke.path[j]
+							path.push([a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])]); break
+						}
+						result.push(path); break
+					}
+					return result
+				}
+				function herdPlaybackStart(a) {
+					if (herdInk !== a || !herdInkGuard(true,true)) throw new Error("Playback owner changed")
+					var p = sceneView.sceneToView(Qt.point(a.origin[0],a.origin[1]))
+					var px = sceneView.sceneToView(Qt.point(a.origin[0]+1,a.origin[1]))
+					var py = sceneView.sceneToView(Qt.point(a.origin[0],a.origin[1]+1))
+					var bottom = sceneView.sceneToView(Qt.point(a.origin[0]+a.block.width,a.origin[1]+a.block.height))
+					// Initial prototype supports the observed upright, unrotated view.
+					// Refuse other transforms instead of projecting onto wrong paper.
+					if ([p.x,p.y,px.x,px.y,py.x,py.y,bottom.x,bottom.y,sceneView.width,sceneView.height].some(function(n) { return typeof n !== "number" || !isFinite(n) }) ||
+						!(px.x > p.x && py.y > p.y) || Math.abs(px.y-p.y) > .001 || Math.abs(py.x-p.x) > .001 ||
+						p.x < 130 || p.y < 210 || bottom.x > sceneView.width-100 || bottom.y > sceneView.height-80)
+						throw new Error("Playback region is not fully visible safe paper")
+						// Do not reparent a Canvas into SceneView during DocumentView construction.
+						// Native toolbar Loader required-property initialization must finish first.
+						if (!herdStrokeCanvas) herdStrokeCanvas = herdStrokeCanvasComponent.createObject(sceneView)
+						if (!herdStrokeCanvas) throw new Error("Playback canvas could not be created")
+						// Allocate/redraw only the diagram, not a full-screen Canvas texture.
+						herdStrokeCanvas.x = p.x; herdStrokeCanvas.y = p.y
+						herdStrokeCanvas.width = bottom.x-p.x; herdStrokeCanvas.height = bottom.y-p.y
+						a.playback = {elapsed:0,last:Date.now(),painted:-1,submitted:-1,matrix:[px.x-p.x,0,0,py.y-p.y,0,0]}
+					a.phase = "playback"
+					herdStrokeCanvas.visible = true; herdStrokeCanvas.requestPaint(); herdPlaybackTimer.restart()
+				}
+				function herdPlaybackStop() {
+						herdPlaybackTimer.stop()
+						if (herdStrokeCanvas) { herdStrokeCanvas.paintOwner = null; herdStrokeCanvas.visible = false; herdStrokeCanvas.requestPaint() }
+				}
+				function herdPlaybackTick() {
+					var a = herdInk
+					// A queued timer callback after handoff must not cancel the native paste.
+					if (!a || a.phase !== "playback") return
+					try {
+						if (!herdInkGuard(true,true)) throw new Error("Playback page or input changed")
+						if (a.playback.painted >= a.playbackProgram.duration) {
+							herdPlaybackTimer.stop(); a.phase = "pasting"
+							var b = a.block
+							a.controller.cloneAddAndSelectItems(a.controller.currentLayer,a.items,1,
+								Qt.point(a.origin[0]+(b.bounds[0]+b.bounds[2])/2,a.origin[1]+(b.bounds[1]+b.bounds[3])/2))
+							return
+						}
+						var now = Date.now(), delta = now-a.playback.last
+						// Over 10 s is the tablet asleep. A shorter gap is xochitl busy elsewhere (its docworker blocked
+						// this thread 0.5 s on 2026-11-01 and lost the reply): the drawing resumes where it paused.
+						if (delta < 0 || delta > 10000) throw new Error("Playback clock stalled; reply held")
+						if (a.playback.painted < a.playback.elapsed) return // wait for Qt's painted signal
+						a.playback.last = now
+						a.playback.elapsed = Math.min(a.playbackProgram.duration,a.playback.elapsed+Math.min(delta,500))
+						herdStrokeCanvas.requestPaint()
+					} catch (e) { herdInkFinish(String(e)) }
+				}
+				function herdPlaybackPaint(canvas) {
+					var a = herdInk, ctx = null, saved = false
+					try {
+						ctx = canvas.getContext("2d")
+						if (!ctx) throw new Error("Playback canvas is unavailable")
+						ctx.resetTransform(); ctx.clearRect(0,0,canvas.width,canvas.height)
+						canvas.paintOwner = null
+						if (!canvas.visible || !a || !a.playback) return
+						if (!herdInkGuard(true,a.phase === "playback")) throw new Error("Playback paint owner changed")
+						var m = a.playback.matrix
+						ctx.save(); saved = true; ctx.setTransform(m[0],m[1],m[2],m[3],m[4],m[5])
+						ctx.beginPath(); ctx.rect(0,0,a.block.width,a.block.height); ctx.clip()
+						ctx.strokeStyle = "black"; ctx.fillStyle = "black"; ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.lineJoin = "round"
+						var paths = herdPlaybackFrame(a.playbackProgram,a.playback.elapsed)
+						for (var i = 0; i < paths.length; i++) {
+							var path = paths[i]
+							ctx.beginPath(); ctx.moveTo(path[0][0],path[0][1])
+							for (var j = 1; j < path.length; j++) ctx.lineTo(path[j][0],path[j][1])
+							if (a.playbackProgram.paths[i].length === 0 && a.playback.elapsed > a.playbackProgram.paths[i].start) {
+								ctx.arc(path[0][0],path[0][1],1,0,2*Math.PI); ctx.fill()
+							} else ctx.stroke()
+						}
+						ctx.restore(); saved = false
+						a.playback.submitted = a.playback.elapsed; canvas.paintOwner = a
+					} catch (e) {
+						if (saved) ctx.restore()
+						if (a && a === herdInk && a.playbackProgram) herdInkFinish(String(e))
+					}
+				}
+				function herdPlaybackPainted(canvas) {
+					var a = canvas.paintOwner
+					if (a && a === herdInk && a.playback) a.playback.painted = a.playback.submitted
+				}
+				Timer { id: herdPlaybackTimer; interval: 40; repeat: true; onTriggered: herdButton.herdPlaybackTick() }
+				property var herdProofWork: null
+				// A save check that goes quiet (its request never answered, or its next step was lost) would leave
+				// "Saving reply…" forever: 20 s with no new check, while nothing is measuring and the pen is away,
+				// asks again, at most 3 times, then says so on the page.
+				Timer {
+					interval: 5000; repeat: true; running: herdButton.herdProofWork !== null
+					onTriggered: {
+						var work = herdButton.herdProofWork
+						if (!work || navigator.herdJob !== work.job || work.inkVerified) { herdButton.herdProofWork = null; return }
+						if (herdButton.herdLayoutCapture || sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500) { work.proofAsked = Date.now(); return }
+						if (Date.now()-work.proofAsked < 20000) return
+						work.proofSeq++
+						if ((work.proofResumes = (work.proofResumes || 0)+1) > 3) {
+							herdButton.herdProofWork = null
+							navigator.herdFail(0, {error: "Save check got no answer; the reply is on the page, inspect before retrying"}); return
+						}
+						console.log("herdRespond: save check got no answer in 20 s; asking again", work.proofResumes)
+						herdButton.herdTextDone(work)
+					}
+				}
+				property var herdStrokeCanvas: null
+				Component {
+					id: herdStrokeCanvasComponent
+					Canvas {
+						id: playbackCanvas
+						property var paintOwner: null
+						renderTarget: Canvas.Image
+						renderStrategy: Canvas.Immediate
+						z: 1000
+						visible: false
+						clip: true
+						// Qt paint completion alone does not request the panel's fast
+						// waveform. Match the firmware's animated UI convention, scoped
+						// to this visible diagram; never change a global screen mode.
+						Epaper.ScreenModeItem {
+							anchors.fill: parent
+							mode: Epaper.ScreenModeItem.Animation
+							visible: playbackCanvas.visible
+						}
+						onPaint: herdButton.herdPlaybackPaint(playbackCanvas)
+						onPainted: herdButton.herdPlaybackPainted(playbackCanvas)
+					}
+				}
+				function herdTextDone(work) {
+					try {
+						if (!herdMine || herdPage !== work.job.page || navigator.herdJob !== work.job) throw new Error("Return to the original page to finish the reply")
+						var c = root.sceneController
+						if (work.endIndex !== undefined) {
+							c.setCursorIndex(work.endIndex < 0 ? c.rootDocumentLength : work.endIndex, SceneController.MoveAnchor)
+							delete work.endIndex
+							herdLater(function() { herdTextDone(work) })
+							return
+						}
+						// Text placed at a point below the ink can gain its blank lines a few
+						// ticks after replaceText returns (8ef5c0b9). A later caption anchors
+						// at the document end, so let the length hold for four samples first.
+						if (work.nativeGap && work.ordered && !work.gapSettled) {
+							if (work.gapLength !== c.rootDocumentLength) { work.gapLength = c.rootDocumentLength; work.gapStable = 0 }
+							if (++work.gapStable < 4) {
+								work.gapPasses = (work.gapPasses || 0) + 1
+								if (work.gapPasses > 20) throw new Error("Text layout did not settle; reply held")
+								herdLater(function() { herdTextDone(work) }); return
+							}
+							work.gapSettled = true
+							c.setCursorIndex(c.rootDocumentLength, SceneController.MoveAnchor)
+						}
+						if (herdStyle(work)) return
+						if (herdOrdered(work)) return
+						var media = work.reply.media || []
+						var mediaIndex = work.mediaIndex || 0
+						if (mediaIndex < media.length) {
+							var item = media[mediaIndex]
+							// The cursor can still point inside the last paragraph after an
+							// async replaceText. Use the native document's full laid-out bounds.
+							var bounds = c.rootDocumentBoundingRect
+							if (!bounds || !isFinite(bounds.y) || !isFinite(bounds.height) || bounds.height <= 0) throw new Error("Native text bounds unavailable; image remains held")
+							var textBottom = bounds.y + bounds.height
+							if (work.lastTextBottom !== textBottom) {
+								work.lastTextBottom = textBottom
+								work.boundsPasses = (work.boundsPasses || 0) + 1
+								if (work.boundsPasses > 12) throw new Error("Text layout did not settle; image remains held")
+								herdLater(function() { herdTextDone(work) }); return
+							}
+							var top = work.mediaBottom || Math.max(textBottom, c.textCursorPosition.y) + Math.max(30, c.textLineHeight || 50)
+							// The native API takes the IMAGE CENTRE in scene coordinates.
+							var position = Qt.point(bounds.x + item.width / 2, top + item.height / 2)
+							work.mediaIndex = mediaIndex + 1
+							c.insertImageFileAsSceneItem(item.url, position)
+							work.mediaBottom = top + item.height + 30
+							work.mediaWaits = 0
+							console.warn("herdRespond: native image requested " + item.asset + " textBottom=" + textBottom + " top=" + top + " cursor=" + c.textCursorPosition.y)
+							herdLater(function() { herdTextDone(work) })
+							return
+						}
+						if (media.length > 0 && !work.mediaVerified) {
+							if (!work.mediaPresented) {
+								var bottom = sceneView.sceneToView(Qt.point(c.textCursorPosition.x, work.mediaBottom))
+								if (bottom.y > sceneView.height - 300) sceneView.tileManager.moveViewBy(Qt.point(0, sceneView.height - 450 - bottom.y))
+								root.exitTextMode()
+								work.mediaPresented = true
+								navigator.herdNote = "Saving reply…"
+							}
+							navigator.herdHttp("POST", "/notebook-media-proof", {page: work.job.path, request: work.reply.request}, function(st, r) {
+								if (st !== 200) { root.exitTextMode(); navigator.herdFail(st, r); return }
+								if (r.state === "persisted") work.mediaVerified = true
+								else {
+									work.mediaWaits = (work.mediaWaits || 0) + 1
+									if (work.mediaWaits > 30) { root.exitTextMode(); navigator.herdFail(0, {error: "Image save not confirmed; inspect before retrying"}); return }
+								}
+								herdLater(function() { herdTextDone(work) })
+							})
+							return
+						}
+						var tm = sceneView.tileManager
+						// The native cursor may still report an earlier line after a
+						// long replacement. Follow laid-out text bounds as well, just
+						// as image placement does, leaving space for the next note.
+						var textBounds = c.rootDocumentBoundingRect
+						var endY = c.textCursorPosition.y
+						if (textBounds && isFinite(textBounds.y) && isFinite(textBounds.height)) endY = Math.max(endY, textBounds.y + textBounds.height)
+						if (work.mediaBottom) endY = Math.max(endY, work.mediaBottom)
+						var end = Qt.point(c.textCursorPosition.x, endY)
+						var cursor = sceneView.sceneToView(end)
+						if (cursor.y > sceneView.height - 300 || cursor.y < 100) {
+							tm.moveViewBy(Qt.point(0, sceneView.height - 450 - cursor.y))
+						}
+						root.exitTextMode()
+						navigator.herdNote = "Saving reply…"
+						if (!work.viewSettled) {
+							work.viewSettled = true
+							herdLater(function() { herdTextDone(work) }); return
+						}
+						// Programmatic moveViewBy may not set scrollPositionChanged,
+						// so save our known final viewport explicitly, using the same
+						// native API as DocumentView's guarded _saveScrollPosition.
+						LibraryController.setScrollPosition(sceneView.document.id, root.currentPage,
+							sceneView.viewToScene(Qt.point(0, sceneView.height)).y)
+						// Measure only after the final scroll/exitTextMode has settled.
+						if (work.job.nativeInkUsed && !work.inkVerified) {
+							var seq = work.proofSeq = (work.proofSeq || 0)+1
+							work.proofAsked = Date.now(); herdProofWork = work
+							navigator.herdHttp("POST", "/notebook-ink-proof", {request: work.reply.request, layout: work.layoutProof || null}, function(st, r) {
+								if (work.proofSeq !== seq) return // a resumed check superseded this one
+								if (navigator.herdJob !== work.job || !herdMine || herdPage !== work.job.page) {
+									console.log("herdRespond: save check", seq, "dropped: page or job changed"); return
+								}
+								console.log("herdRespond: save check", seq, st, r && (r.state || (r.measure_layout ? "measure" : "")), r && r.reason || "")
+								if (st !== 200) { navigator.herdFail(st, r); return }
+								delete work.layoutProof
+								var savedLengthPending = herdSavedLengthPending(r.measure_layout)
+								if (r.measure_layout && !savedLengthPending) {
+									try {
+										herdMeasureLayout(r.measure_layout, function(result) { work.layoutProof = result; herdTextDone(work) }, function() { herdPenWait(work) })
+									} catch (e) { navigator.herdFail(0, {error: String(e)}) }
+									return
+								}
+								if (r.state === "persisted") { work.inkVerified = true; herdProofWork = null }
+								else if ((work.inkWaits = (work.inkWaits || 0)+1) > 30) { navigator.herdFail(0, {error: "Native drawing save not confirmed; inspect before retrying"}); return }
+								herdLater(function() { herdTextDone(work) }, savedLengthPending)
+							})
+							return
+						}
+						navigator.herdHttp("POST", "/native-text-done", {page: work.job.path, request: work.reply.request}, function(st, r) {
+							if (st !== 200) { navigator.herdFail(st, r); return }
+							navigator.herdState = ""; navigator.herdNote = ""; navigator.herdJob = null
+						})
+					} catch (e) { root.exitTextMode(); navigator.herdFail(0, {error: String(e)}) }
+				}
+				// Explicit view-only preservation audit on our isolated fixture.
+				// Never changes content, selection, tool, page, or power settings.
+				function herdAuditView(job, reportedAt) {
+					try {
+						if (!job || typeof job.id !== "string" || !/^[0-9a-f]{32}$/.test(job.id) || herdAuditSeen === job.id) return false
+						herdAuditSeen = job.id // refused/lost commands are never replayed
+						if (typeof reportedAt !== "number" || !isFinite(reportedAt) || Date.now()-reportedAt > 3000 || Date.now() < reportedAt ||
+							job.doc !== "905df7ae-ff54-46b9-a71e-45bb02bef638" || job.page !== "3ad12986-0467-48fe-986d-d1bd480c4777" ||
+							!sceneView.document || job.doc !== navigator.herdUuid(sceneView.document.id) || job.page !== herdPage ||
+							job.surface !== herdContextSurface || navigator.herdJob || herdInk || herdPasteBusy || herdProbeJob ||
+							root.inSuspend || sceneView.isLoading || !root.sceneController || root.sceneController.working ||
+							sceneView.penClose || sceneView.strokeHandler.timeSincePenUp() < 1500 ||
+							job.content_revision !== herdContextRevision || job.ink_revision !== herdContextInk ||
+							typeof job.dy !== "number" || !isFinite(job.dy) || Math.floor(job.dy) !== job.dy ||
+							Math.abs(job.dy) < 1 || Math.abs(job.dy) > 1200 || !job.view || job.view.length !== 6) return false
+						var matrix = herdInkView()
+						for (var i = 0; i < 6; i++) if (typeof job.view[i] !== "number" || !isFinite(job.view[i]) || Math.abs(matrix[i]-job.view[i]) > .001) return false
+						if (matrix[0] !== 1 || matrix[1] !== 0 || matrix[2] !== 0 || matrix[3] !== 1) return false
+						sceneView.tileManager.moveViewBy(Qt.point(0, job.dy))
+						return true
+					} catch (e) { return false }
+				}
+				// Geometry only: no notebook text. Returned maintenance/probe/audit
+				// hints require their own guards; this is not a drawing lease.
+				function herdReportContext(reported) {
+					if (herdContextBusy || !sceneView.document || !root.sceneController || herdTitle.indexOf("To ") !== 0) {
+						if (typeof reported === "function") reported(false)
+						return
+					}
+					var doc = navigator.herdUuid(sceneView.document.id)
+					if (!doc || !herdPage) { if (typeof reported === "function") reported(false); return }
+					var bodyPage = herdPage
+					try {
+						var p = sceneView.viewToScene(Qt.point(0, 0))
+						var reportedAt = Date.now()
+						var px = sceneView.viewToScene(Qt.point(1, 0))
+						var py = sceneView.viewToScene(Qt.point(0, 1))
+						var bounds = root.sceneController.rootDocumentBoundingRect
+						if (!bounds) { if (typeof reported === "function") reported(false); return }
+						// Some firmware builds do not emit documentContentChanged for
+						// typed edits. Track observable native layout/length as well.
+						var signature = [root.sceneController.rootDocumentLength, bounds.x, bounds.y, bounds.width, bounds.height].join(",")
+						if (herdContextLayoutSignature && herdContextLayoutSignature !== signature) herdContextRevision++
+						herdContextLayoutSignature = signature
+						herdContextBusy = true
+						navigator.herdHttp("POST", "/native-context", {
+							doc: doc, page: bodyPage, surface: herdContextSurface, sequence: ++herdContextSequence,
+							active: !root.inSuspend && !sceneView.isLoading,
+							view: [px.x-p.x, px.y-p.y, py.x-p.x, py.y-p.y, p.x, p.y],
+							size: [sceneView.width, sceneView.height],
+							text_bounds: [bounds.x, bounds.y, bounds.width, bounds.height],
+							content_revision: herdContextRevision, ink_revision: herdContextInk
+						}, function(st, r) {
+							herdContextBusy = false
+							if (typeof reported === "function") reported(st === 200 && !!r && r.accepted === true)
+							if (st === 200) herdObserveIncomplete(r, bodyPage, doc)
+							if (st === 200 && r && r.accepted && r.audit_view) herdAuditView(r.audit_view, reportedAt)
+							if (st === 200 && r && r.accepted && herdPage === bodyPage &&
+								sceneView.document && navigator.herdUuid(sceneView.document.id) === doc &&
+								typeof r.keep_awake_seconds === "number" && isFinite(r.keep_awake_seconds) &&
+								r.keep_awake_seconds >= 0 && r.keep_awake_seconds <= 180) {
+								herdAwakeUntil = Date.now() + r.keep_awake_seconds * 1000
+								herdAwakeActive = !root.inSuspend && r.keep_awake_seconds > 0
+							}
+							if (st === 200 && r && r.accepted && r.probe) herdStartProbe(r.probe)
+							// A dismissed failure no longer has a Navigator job. Only an
+							// explicit, safe server repair token may resume that held reply.
+							if (st !== 200 || !r || !r.repair || !r.repair.token || !r.repair.request || navigator.herdJob || root.inSuspend || sceneView.isLoading ||
+								herdPage !== bodyPage || !sceneView.document || navigator.herdUuid(sceneView.document.id) !== doc ||
+								herdContextRepairSeen === r.repair.token) return
+							herdContextRepairSeen = r.repair.token
+							herdResumeCheckedPage = ""
+							herdResumeHeld() // GET revalidates the current page/request/token.
+						})
+					} catch (e) { herdContextBusy = false; if (typeof reported === "function") reported(false) }
+				}
+				// Read-only hidden asset loading/source-clone probe. The separate
+				// paste-blank-test operation requires native input lock, independent
+				// source/blank preflight and durable claim. No clipboard or pen replay.
+				function herdStartProbe(job) {
+					if (!job || !job.id || herdProbeJob || herdInk || herdPasteBusy || navigator.herdJob || herdProbeSeen === job.id || root.inSuspend ||
+						job.doc !== navigator.herdUuid(sceneView.document.id) || job.page !== herdPage ||
+						job.surface !== herdContextSurface || (job.source_doc === job.doc && !(job.operation === "text-anchor" && job.source_page !== job.page))) return
+					herdProbeSeen = job.id; herdProbeJob = job; herdProbePasses = 0
+					herdProbePhase = "loading"; herdProbeSelected = 0; herdProbeCloned = 0
+					herdProbeCloneValue = false
+					herdProbeHasLength = false; herdProbeReason = "none"
+					herdProbeItems = null; herdPasteController = null; herdPasteLockPasses = 0
+					herdProbeTextAnchor = null
+					herdProbeTextBounds = null; herdProbeInkBounds = null
+					herdProbeImportDoc = ""; herdProbeImportPage = ""
+					try {
+						if (job.operation === "import-source") {
+							if (typeof DocumentImporter.importFromUrls !== "function" || !Library.entryAdded) { herdFinishProbe("unavailable"); return }
+							// Native importer owns library registration; never reload the open notebook.
+							herdProbeImportCallback = function(id) {
+								if (herdProbeJob !== job || herdProbeImportDoc) return
+								var imported = Library.entryForId(id)
+								if (!imported || String(imported.visibleName) !== "Agent lesson source " + job.source_doc) return
+								if (navigator.herdJob || root.inSuspend || herdPage !== job.page || herdContextSurface !== job.surface || navigator.herdUuid(id) === job.doc) { herdFinishProbe("unavailable"); return }
+								herdProbeImportDoc = navigator.herdUuid(id)
+								// Import remaps BOTH document and page UUIDs on current firmware.
+								herdProbeImportPage = navigator.herdUuid(imported.idForPage(0))
+								herdProbeView = herdAssetScene.createObject(herdButton, {document: imported, pageId: herdProbeImportPage})
+								if (!herdProbeView) herdFinishProbe("unavailable")
+							}
+							Library.entryAdded.connect(herdProbeImportCallback)
+							herdProbeTimer.restart()
+							DocumentImporter.importFromUrls(["file:///home/root/.cache/herd-board/imports/" + job.source_doc + ".rmdoc"], job.source_parent)
+							return
+						}
+						var source = Library.entryForId(job.source_doc)
+						if (!source) { herdFinishProbe("unavailable"); return }
+						herdProbeView = herdAssetScene.createObject(herdButton, {document: source, pageId: job.source_page})
+						if (!herdProbeView) { herdFinishProbe("unavailable"); return }
+						herdProbeTimer.restart()
+					} catch (e) { herdFinishProbe("unavailable") }
+				}
+				function herdProbeTick() {
+					if (!herdProbeJob) { herdProbeTimer.stop(); return }
+					if (navigator.herdJob || root.inSuspend || herdPage !== herdProbeJob.page || !sceneView.document ||
+						navigator.herdUuid(sceneView.document.id) !== herdProbeJob.doc) { herdFinishProbe("unavailable"); return }
+					if (!herdProbeView) {
+						if (++herdProbePasses >= 80) herdFinishProbe("timeout")
+						return
+					}
+					var v = herdProbeView
+					if (herdPasteBusy) { herdBlankPasteTick(); return }
+					if (v.status === SceneView.Active && v.pageStatus === Page.Ready && v.controller && !v.controller.working) {
+						if (herdProbeJob.operation === "text-anchor") {
+							try {
+								var tc = v.controller
+								var qi = herdProbeJob.cursor_index === undefined ? 0 : herdProbeJob.cursor_index
+								if (tc === root.sceneController || !tc.hasRootDocument || tc.rootDocumentLength < 1 ||
+									typeof qi !== "number" || !isFinite(qi) || qi % 1 !== 0 || qi < 0 || qi > 262144 || qi > tc.rootDocumentLength ||
+									herdContextSurface !== herdProbeJob.surface || herdContextRevision !== herdProbeJob.revision || herdContextInk !== herdProbeJob.ink) throw new Error("Anchor probe source or foreground changed")
+								if (herdProbePhase === "loading") {
+									herdProbePhase = "text-cursor"
+									// Only a cursor on the hidden, existing text document: no
+									// createRootDocument, replaceText, selection or paste.
+									tc.focusRootDocument()
+									tc.setCursorIndex(qi, SceneController.MoveAnchor)
+									return
+								}
+								if (tc.textCursorIndex === qi && isFinite(tc.textCursorPosition.x) && isFinite(tc.textCursorPosition.y) && tc.textLineHeight > 0) {
+									herdProbeTextAnchor = [tc.textCursorPosition.x, tc.textCursorPosition.y, tc.textLineHeight, tc.rootDocumentLength]
+									if (herdProbeJob.cursor_index !== undefined) {
+										var rb = tc.rootDocumentBoundingRect
+										if (!rb || !isFinite(rb.x) || !isFinite(rb.y) || !isFinite(rb.width) || !isFinite(rb.height) || rb.width <= 0 || rb.height <= 0) throw new Error("Native text bounds unavailable")
+										herdProbeTextBounds = [rb.x, rb.y, rb.width, rb.height]
+										// Document-wide item bounds, NOT per-anchor geometry or
+										// preservation proof. Read only; never select or clone.
+										var ib = tc.itemsBoundingRect
+										if (ib) {
+											if (!isFinite(ib.x) || !isFinite(ib.y) || !isFinite(ib.width) || !isFinite(ib.height) || ib.width < 0 || ib.height < 0) throw new Error("Native item bounds unavailable")
+											herdProbeInkBounds = [ib.x, ib.y, ib.width, ib.height]
+										}
+									}
+									herdFinishProbe("text-anchor"); return
+								}
+							} catch (e) { herdFinishProbe("unavailable"); return }
+							if (++herdProbePasses >= 80) herdFinishProbe("timeout")
+							return
+						}
+						if (herdProbeJob.operation !== "clone-source" && herdProbeJob.operation !== "paste-blank-test" && herdProbeJob.operation !== "import-source") { herdFinishProbe("loaded"); return }
+						try {
+							var c = v.controller
+							if (herdProbePhase === "loading") {
+								herdProbePhase = "selecting"
+								// Current firmware enum really is spelled InitalSelection.
+								c.addSelectionRect(Qt.rect(-10, -10, 920, 520), SceneController.InitalSelection)
+								return
+							}
+							if (herdProbePhase === "selecting" && c.selectionItemCount === herdProbeJob.expected_strokes) {
+								herdProbeSelected = c.selectionItemCount
+								herdProbePhase = "cloning"
+								var items = c.cloneSelectedItems(c.currentLayer, 1)
+								herdProbeCloneValue = items !== null && typeof items !== "undefined"
+								herdProbeHasLength = !!items && typeof items.length === "number"
+								if (herdProbeHasLength) herdProbeCloned = items.length
+								console.warn("herdRespond: source clone layer=" + c.currentLayer + " selected=" + c.selectionItemCount + " nativeValue=" + herdProbeCloneValue + " hasLength=" + herdProbeHasLength + " length=" + herdProbeCloned)
+								if (herdProbeCloneValue && herdProbeJob.operation === "paste-blank-test") {
+									if (herdProbeHasLength && herdProbeCloned !== herdProbeJob.expected_strokes) { herdProbeReason = "clone-empty"; herdFinishProbe("unavailable"); return }
+									herdProbeItems = items
+									if (!herdBeginBlankPaste()) herdFinishProbe("unavailable")
+									return
+								}
+								herdFinishProbe(herdProbeCloneValue ? "cloned" : "unavailable"); return
+							}
+						} catch (e) { console.warn("herdRespond: source clone diagnostic " + String(e)); herdFinishProbe("unavailable"); return }
+					}
+					if (++herdProbePasses >= 80) herdFinishProbe("timeout")
+				}
+				function herdBeginBlankPaste() {
+					var c = root.sceneController
+					if (!c || c.working) { herdProbeReason = "destination-busy"; return false }
+					// pendingEdit is a QTransform, NOT a boolean edit-presence flag.
+					if (c.selectionItemCount !== 0 || c.hasTextSelection) { herdProbeReason = "destination-selection"; return false }
+					if (c.rootDocumentLength !== 0) { herdProbeReason = "destination-content"; return false }
+					if (navigator.herdJob) { herdProbeReason = "agent-job-active"; return false }
+					if (herdContextInk !== 0) { herdProbeReason = "new-ink"; return false }
+					if (sceneView.textMode) { herdProbeReason = "text-mode"; return false }
+					if (sceneView.penClose) { herdProbeReason = "pen-near"; return false }
+					if (sceneView.adjustViewActive) { herdProbeReason = "adjust-view-active"; return false }
+					if (sceneView.strokeHandler.timeSincePenUp() < 1500) { herdProbeReason = "pen-recent"; return false }
+					herdPasteController = c; herdProbePhase = "locking"; herdPasteLockPasses = 0
+					herdPasteBusy = true // native surface handler becomes null, touch/key UI disabled
+					return true
+				}
+				function herdBlankPasteGuard() {
+					var j = herdProbeJob
+					if (!j || !herdPasteBusy || !herdPasteController || root.sceneController !== herdPasteController ||
+						root.inSuspend ||
+						herdPage !== j.page || herdContextSurface !== j.surface || !sceneView.document ||
+						navigator.herdUuid(sceneView.document.id) !== j.doc || herdContextInk !== 0 ||
+						herdPasteController.rootDocumentLength !== 0) { herdProbeReason = "page-changed"; return false }
+					if (root.enabled !== false || !sceneView.adjustViewActive || sceneView.strokeHandler.lineTool !== Line.SelectionTool) { herdProbeReason = "ui-not-locked"; return false }
+					if ((herdProbePhase === "locking" || herdProbePhase === "claiming") && herdContextRevision !== j.revision) { herdProbeReason = "revision-changed"; return false }
+					var p = sceneView.viewToScene(Qt.point(0, 0))
+					var px = sceneView.viewToScene(Qt.point(1, 0))
+					var py = sceneView.viewToScene(Qt.point(0, 1))
+					if (Math.abs(p.x + 702) > .001 || Math.abs(p.y) > .001 || Math.abs(px.x-p.x-1) > .001 ||
+						Math.abs(px.y-p.y) > .001 || Math.abs(py.x-p.x) > .001 || Math.abs(py.y-p.y-1) > .001) { herdProbeReason = "view-changed"; return false }
+					// Verify the actual native input routing, not just a busy flag.
+					for (var i = 0; i < sceneView.children.length; i++) {
+						var child = sceneView.children[i]
+						if (String(child).indexOf("PenInputSurface") >= 0) {
+							if (child.handler !== null) { herdProbeReason = "pen-routing-active"; return false }
+							return true
+						}
+					}
+					herdProbeReason = "surface-missing"
+					return false
+				}
+				function herdBlankPasteTick() {
+					if (++herdProbePasses >= 80) { herdFinishProbe("timeout"); return }
+					if (!herdBlankPasteGuard()) { herdFinishProbe("unavailable"); return }
+					var c = herdPasteController
+					if (herdProbePhase === "locking") {
+						if (++herdPasteLockPasses < 2 || c.working) return
+						if (c.selectionItemCount !== 0) { herdFinishProbe("unavailable"); return }
+						herdProbePhase = "claiming"
+						var j = herdProbeJob
+						navigator.herdHttp("POST", "/native-probe-claim", {id: j.id, doc: j.doc, page: j.page, surface: j.surface, ui_locked: true}, function(st, r) {
+							if (herdProbeJob !== j || !herdPasteBusy || herdProbePhase !== "claiming") return
+							if (st !== 200 || !r || !r.claimed || r.id !== j.id) { herdProbeReason = "claim-refused"; herdFinishProbe("unavailable"); return }
+							if (!herdBlankPasteGuard()) { herdFinishProbe("unavailable"); return }
+							herdProbePhase = "pasting" // set BEFORE dispatch; never dispatch twice
+							try { c.cloneAddAndSelectItems(c.currentLayer, herdProbeItems, 1, Qt.point(-100, 550)) }
+							catch (e) { console.warn("herdRespond: native blank paste " + String(e)); herdFinishProbe("unavailable") }
+						})
+					} else if (herdProbePhase === "pasting" && !c.working && c.selectionItemCount === herdProbeJob.expected_strokes && sceneView.itemSelectionMode) {
+						herdProbePhase = "committing"
+						// Follow the firmware's own selection transaction: this applies
+						// pending transforms, closes selection UI and clears selection.
+						sceneView.endItemSelection()
+					} else if (herdProbePhase === "committing" && !c.working && c.selectionItemCount === 0 && !sceneView.itemSelectionMode) {
+						herdFinishProbe("pasted") // native commit, NOT saved/persistence proof
+					}
+				}
+				function herdFinishProbe(state) {
+					herdProbeTimer.stop()
+					if (!herdProbeJob) return
+					console.warn("herdRespond: native diagnostic state=" + state + " phase=" + herdProbePhase + " reason=" + herdProbeReason)
+					var v = herdProbeView
+					var c = v ? v.controller : null
+					var report = {id: herdProbeJob.id, state: state,
+						view_active: !!v && v.status === SceneView.Active,
+						page_ready: !!v && v.pageStatus === Page.Ready,
+						controller: !!c, working: !!c && !!c.working,
+						clone_selected: !!c && typeof c.cloneSelectedItems === "function",
+						select_rect: !!c && typeof c.addSelectionRect === "function",
+						select_area: !!c && typeof c.areaSelected === "function",
+						select_all: !!c && typeof c.selectAll === "function",
+						selected: herdProbeSelected, cloned: herdProbeCloned, clone_value: herdProbeCloneValue}
+					if (herdProbeJob.operation === "import-source") {
+						report.imported_doc = herdProbeImportDoc || null
+						report.imported_page = herdProbeImportPage || null
+					}
+					if (state === "text-anchor") {
+						report.text_anchor = herdProbeTextAnchor
+						if (herdProbeJob.cursor_index !== undefined) {
+							report.text_cursor_index = herdProbeJob.cursor_index
+							report.text_bounds = herdProbeTextBounds
+							if (herdProbeInkBounds) report.ink_bounds = herdProbeInkBounds
+						}
+					}
+					if (herdProbeImportCallback) {
+						Library.entryAdded.disconnect(herdProbeImportCallback)
+						herdProbeImportCallback = null
+					}
+					navigator.herdHttp("POST", "/native-probe-result", report, function(st, r) {})
+					herdProbeJob = null; herdProbeView = null
+					if (herdPasteController) herdPasteBusy = false
+					herdPasteController = null; herdProbeItems = null
+					if (v) v.destroy()
+				}
+				Timer { id: herdProbeTimer; interval: 250; repeat: true; onTriggered: herdButton.herdProbeTick() }
+				Connections {
+					target: root.sceneController
+					ignoreUnknownSignals: true
+					function onDocumentContentChanged() { herdButton.herdContextRevision++ }
+					function onUpdated() { herdButton.herdContextRevision++ }
+				}
+				Connections {
+					target: sceneView.strokeHandler
+					ignoreUnknownSignals: true
+					function onStrokeCompleted() { herdButton.herdContextInk++ }
+				}
+				Timer {
+					interval: 500; repeat: true; triggeredOnStart: true
+					running: herdButton.herdTitle.indexOf("To ") === 0
+					onTriggered: {
+						herdButton.herdAwakeActive = Date.now() < herdButton.herdAwakeUntil && !root.inSuspend
+						herdButton.herdReportContext()
+					}
+				}
+				Timer {
+					id: herdOpenTimer
+					interval: 250
+					repeat: true
+					onTriggered: herdButton.herdFollowLatest()
+				}
+				Timer {
+					id: herdLayoutTimer
+					interval: 150
+					repeat: false
+					property var slots: ({})
+					onTriggered: {
+						var now = Date.now(), due = [], left = {}
+						for (var k in slots) { if (slots[k].due <= now+5) due.push(slots[k].callback); else left[k] = slots[k] }
+						slots = left
+						herdButton.herdLaterArm()
+						for (var i = 0; i < due.length; i++) due[i]()
+					}
+				}
+				onHerdMineChanged: herdTake()
+				onHerdPageChanged: { herdTake(); herdOpenPasses = 0; herdOpenTimer.restart() }
+				onHerdTitleChanged: { herdOpenPasses = 0; herdOpenTimer.restart() }
+				Component.onCompleted: herdOpenTimer.restart()
+				Connections {
+					target: navigator
+					function onHerdStateChanged() { herdButton.herdTake() }
+				}
+			}
+		}
+	END TRAVERSE
+END AFFECT

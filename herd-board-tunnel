@@ -1,0 +1,9 @@
+#!/bin/sh
+# herd-board-tunnel [HOST]: the tablet's 127.0.0.1:8791 forwarded to this Mac's herd-board-serve (ssh -R), held until
+# the link drops; launchd (install-mac.sh) starts it again. A link that died with the tablet asleep leaves its session
+# holding the port there, so each start first closes the session the last one recorded in /run/herd-board-tunnel.
+H=${1:-root@remarkable.lan} P=8791
+O="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3"
+ssh $O -n "$H" 'p=$(cat /run/herd-board-tunnel 2>/dev/null); [ -n "$p" ] && [ "$(cat /proc/$p/comm 2>/dev/null)" = dropbear ] && kill "$p"; true' || exit 1
+sleep 1
+exec ssh $O -n -o ExitOnForwardFailure=yes -R $P:127.0.0.1:$P "$H" 'echo $PPID >/run/herd-board-tunnel; exec sleep 2147483647'

@@ -1,0 +1,55 @@
+#!/bin/bash
+# feed: the data behind r1-primer-ui (Primer, window 24), run as its child: the conversation the engine
+# (lib/r1-primer/primer) keeps in $XDG_RUNTIME_DIR/r1-primer/log, and what it is doing now.
+# Frames on stdout, each ending in a line "end"; fields tab-separated, newlines in a text as \x1f:
+#   busy  0|1 STAGE          the engine is at work, and on what
+#   view  PATH ID            while it is: what the tablet is drawing now, a PNG; ID changes with each new one
+#   q|s|e TEXT               a question, a part of the story told, an error
+# Commands on stdin: "new" (clear the conversation), "say I" (message I spoken again), "view 0|1" (the window went
+# off or came on screen). Off screen or dark it reads only the backlight.
+export LC_ALL=C.UTF-8
+RT=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+A=$RT/r1-primer
+mkdir -p "$A"
+exec 2>>"$RT/r1-primer.log"
+BL=/sys/class/leds/lcd-backlight/brightness
+VIS=1 LIT=1 SIG='' LAST='' MSGS=()
+
+busy() { local p; read -r p 2>/dev/null < "$A/busy" && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+
+look() {
+	local b=0 st='' v='' s f k t i
+	busy && b=1 && read -r st 2>/dev/null < "$A/stage" && v=$(stat -c %i.%s "$A/view.png" 2>/dev/null)
+	s=$(stat -c '%Y%s' "$A/log" 2>/dev/null)
+	if [ "$s" != "$SIG" ]; then
+		SIG=$s MSGS=()
+		[ -s "$A/log" ] && mapfile -t MSGS < <(tail -40 "$A/log" | jq -r '[.k, (.t | gsub("[\r\t]"; " ")
+			| gsub("\n"; "\u001f"))] | join("\t")')
+	fi
+	f="busy	$b	$st"$'\n'
+	[ -n "$v" ] && f+="view	$A/view.png	$v"$'\n'
+	for i in "${MSGS[@]}"; do f+="$i"$'\n'; done
+	[ "$f" = "$LAST" ] && return
+	LAST=$f; printf '%send\n' "$f"
+}
+
+act() {
+	local c=${1%% *} a=${1#* } t
+	case $c in
+	new) busy || : > "$A/log" ;;
+	say)
+		[[ $a =~ ^[0-9]+$ ]] && [ -n "${MSGS[a]}" ] || return
+		t=${MSGS[a]#*$'\t'}
+		r1-say -now -k info -- "${t//$'\x1f'/ }" ;;
+	view) VIS=$a ;;
+	esac
+}
+
+look
+while :; do
+	if [ "$VIS" != 1 ]; then t=30; elif [ "$LIT" = 0 ]; then t=3; elif busy; then t=1; else t=2; fi
+	if IFS= read -r -t $t cmd; then act "$cmd"
+	elif [ $? -le 128 ]; then exit 0; fi   # the app is gone
+	LIT=1; read -r LIT 2>/dev/null < $BL
+	[ "$VIS" = 1 ] && [ "$LIT" != 0 ] && look
+done

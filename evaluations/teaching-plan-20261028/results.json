@@ -1,0 +1,84 @@
+{
+  "tablet_proven": false,
+  "handwriting_proven": false,
+  "conditions": "Single first attempt per unchanged question. Same Luna/minimal/2400 tokens/15 seconds. Source run metrics preserved, including deadlines; completed-response latency excludes deadline cases.",
+  "ordinary_baseline": {
+    "attempted": 14,
+    "raw_replies": 14,
+    "visual_lessons": 10,
+    "text_fallbacks": 1,
+    "deadlines": 0,
+    "wall_median_all_ms": 3594.5845,
+    "wall_median_completed_ms": 3594.5845,
+    "first_text_median_ms": 2163.0,
+    "output_tokens": 5562,
+    "failures": [
+      {
+        "id": "transistor",
+        "error": "nonzero drawing segment required"
+      },
+      {
+        "id": "water-cycle",
+        "error": "connection needs distinct existing endpoints"
+      },
+      {
+        "id": "dependency-failure",
+        "error": "every declared object/connection must appear in a step"
+      }
+    ]
+  },
+  "ordinary_candidate": {
+    "attempted": 14,
+    "raw_replies": 12,
+    "visual_lessons": 9,
+    "text_fallbacks": 1,
+    "deadlines": 2,
+    "wall_median_all_ms": 3882.415,
+    "wall_median_completed_ms": 3661.2295000000004,
+    "first_text_median_ms": 2330.0,
+    "output_tokens": 4825,
+    "failures": [
+      {
+        "id": "transistor",
+        "error": "stroke outside reserved diagram region"
+      },
+      {
+        "id": "blue-sky",
+        "error": "reveal endpoints before or with their connector"
+      },
+      {
+        "id": "sensor-alarm",
+        "error": "deadline"
+      },
+      {
+        "id": "dependency-failure",
+        "error": "deadline"
+      }
+    ]
+  },
+  "research_candidate": {
+    "attempted": 3,
+    "raw_replies": 2,
+    "visual_lessons": 0,
+    "text_fallbacks": 0,
+    "deadlines": 1,
+    "wall_median_all_ms": 7097.658,
+    "wall_median_completed_ms": 7086.3805,
+    "first_text_median_ms": 3804.5,
+    "output_tokens": 1678,
+    "failures": [
+      {
+        "id": "aperiodic-hierarchy",
+        "error": "no joint clear label placement; simplify the scene"
+      },
+      {
+        "id": "kakeya-dimension",
+        "error": "missing or excessive lesson text"
+      },
+      {
+        "id": "langlands-correspondence",
+        "error": "deadline"
+      }
+    ]
+  }
+}

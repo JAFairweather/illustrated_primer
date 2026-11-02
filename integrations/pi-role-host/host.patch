@@ -1,0 +1,469 @@
+diff --git a/mcp/tools/pi_notebook_host.mjs b/mcp/tools/pi_notebook_host.mjs
+index 556e7f3..731ed9c 100644
+--- a/mcp/tools/pi_notebook_host.mjs
++++ b/mcp/tools/pi_notebook_host.mjs
+@@ -1,17 +1,72 @@
+ // Optional owner-configured notebook host. No credentials, subprocess, channel
+ // consumer or model settings here; the installed adapter owns its Pi lifecycle.
+-import { readFileSync } from 'node:fs'
+-import { dirname, isAbsolute, resolve } from 'node:path'
++import { readFileSync, lstatSync, realpathSync } from 'node:fs'
++import { basename, dirname, isAbsolute, parse, resolve } from 'node:path'
+ import { pathToFileURL } from 'node:url'
+ import { fixedPath } from './channel_client.mjs'
+ 
+ const PROMPT_BYTES = 64_000 // matches the notebook responder's input contract
+ 
++function fixedModel(raw) {
++  if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
++      Object.keys(raw).sort().join(',') !== 'id,provider' ||
++      raw.provider !== 'openai-codex' || typeof raw.id !== 'string' ||
++      !/^[a-z0-9][a-z0-9.\-\[\]]{0,63}$/i.test(raw.id)) {
++    throw new Error('evaluation requires a fixed openai-codex model identity')
++  }
++  return Object.freeze({ provider: raw.provider, id: raw.id })
++}
++
++function evaluationSocket(path) {
++  if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path ||
++      basename(path) !== 'notebook-eval.sock' || Buffer.byteLength(path) > 100) {
++    throw new Error('evaluation needs a short absolute notebook-eval.sock path')
++  }
++  const parent = dirname(path), uid = process.getuid?.()
++  const st = lstatSync(parent)
++  if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== uid || (st.mode & 0o077) ||
++      realpathSync(parent) !== parent) throw new Error('evaluation socket parent must be pre-created and owner-only')
++  // A private leaf must not be replaceable through a writable ancestor.
++  for (let dir = parent; ; dir = dirname(dir)) {
++    const entry = lstatSync(dir), stickyRoot = entry.uid === 0 && (entry.mode & 0o1000)
++    if (!entry.isDirectory() || ![0, uid].includes(entry.uid) || ((entry.mode & 0o022) && !stickyRoot)) {
++      throw new Error('evaluation socket ancestors must be owner-held')
++    }
++    if (dir === parse(dir).root) break
++  }
++  return path
++}
++
++function readEvalRoster(raw, productionPrompt) {
++  if (!Array.isArray(raw) || raw.length !== 6) throw new Error('eval_roster requires exactly six candidates')
++  const paths = new Set(), variants = new Set(), counts = { planner: 0, drawer: 0, critic: 0 }
++  const roster = raw.map(item => {
++    if (!item || typeof item !== 'object' || Array.isArray(item) ||
++        Object.keys(item).sort().join(',') !== 'model,output_tokens,prompt_file,reasoning,role,socket_path' ||
++        !Object.hasOwn(counts, item.role) ||
++        !['minimal', 'low', 'medium', 'high', 'xhigh'].includes(item.reasoning) ||
++        !Number.isInteger(item.output_tokens) || item.output_tokens < 1 || item.output_tokens > 8192 ||
++        typeof item.prompt_file !== 'string') throw new Error('malformed evaluation candidate')
++    const model = fixedModel(item.model)
++    const prompt = fixedPath(item.prompt_file, 'evaluation prompt', PROMPT_BYTES)
++    if ((prompt.stat.mode & 0o077) || prompt.path === productionPrompt) throw new Error('evaluation prompt must be private and separate from production')
++    const socketPath = evaluationSocket(item.socket_path)
++    const variant = JSON.stringify([item.role, model.provider, model.id, item.reasoning, item.output_tokens])
++    if (paths.has(socketPath)) throw new Error('duplicate evaluation socket path')
++    if (variants.has(variant)) throw new Error('duplicate evaluation candidate')
++    paths.add(socketPath); variants.add(variant); counts[item.role]++
++    return Object.freeze({ role: item.role, prompt_file: prompt.path, model,
++      reasoning: item.reasoning, output_tokens: item.output_tokens, socket_path: socketPath })
++  })
++  if (Object.values(counts).some(count => count !== 2)) throw new Error('eval_roster needs two candidates per role')
++  return Object.freeze(roster)
++}
++
+ export function readNotebookConfig(raw, stateDir) {
+   if (raw === undefined) return null
+   if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
+       !Object.hasOwn(raw, 'adapter_dir') || !Object.hasOwn(raw, 'prompt_file') ||
+-      Object.keys(raw).some(key => !['adapter_dir', 'prompt_file', 'eval_prompt_file', 'eval_model', 'eval_response_format'].includes(key)) ||
++      Object.keys(raw).some(key => !['adapter_dir', 'prompt_file', 'eval_prompt_file', 'eval_model', 'eval_response_format', 'eval_roster'].includes(key)) ||
+       typeof raw.adapter_dir !== 'string' || !isAbsolute(raw.adapter_dir) || resolve(raw.adapter_dir) !== raw.adapter_dir ||
+       typeof raw.prompt_file !== 'string') throw new Error('notebook requires fixed adapter/prompt paths and bounded eval options')
+   if ((Object.hasOwn(raw, 'eval_model') || Object.hasOwn(raw, 'eval_response_format')) && !Object.hasOwn(raw, 'eval_prompt_file')) {
+@@ -31,6 +86,10 @@ export function readNotebookConfig(raw, stateDir) {
+   }
+   const prompt = fixedPath(raw.prompt_file, 'notebook system prompt', PROMPT_BYTES)
+   if (prompt.stat.mode & 0o077) throw new Error('notebook system prompt must be owner-only (mode 0600)')
++  if (Object.hasOwn(raw, 'eval_roster') && ['eval_prompt_file', 'eval_model', 'eval_response_format'].some(key => Object.hasOwn(raw, key))) {
++    throw new Error('choose eval_roster or the legacy evaluation binding, not both')
++  }
++  const evalRoster = Object.hasOwn(raw, 'eval_roster') ? readEvalRoster(raw.eval_roster, prompt.path) : Object.freeze([])
+   const socketPath = resolve(stateDir, 'notebook.sock')
+   if (Buffer.byteLength(socketPath) > 100) throw new Error('state_dir is too deep for the notebook socket')
+   let evalPromptFile = null, evalSocketPath = null
+@@ -52,7 +111,7 @@ export function readNotebookConfig(raw, stateDir) {
+       evalModel = Object.freeze({ provider: raw.eval_model.provider, id: raw.eval_model.id })
+     }
+   }
+-  return Object.freeze({ modulePath: files[0].path, promptFile: prompt.path, socketPath, evalPromptFile, evalSocketPath, evalModel, evalResponseFormat })
++  return Object.freeze({ modulePath: files[0].path, promptFile: prompt.path, socketPath, evalPromptFile, evalSocketPath, evalModel, evalResponseFormat, evalRoster })
+ }
+ 
+ export async function installPiNotebook(pi, config, evalMode = false) {
+@@ -62,22 +121,29 @@ export async function installPiNotebook(pi, config, evalMode = false) {
+     const checked = readNotebookConfig({ adapter_dir: dirname(config.modulePath), prompt_file: config.promptFile,
+       ...(config.evalPromptFile ? { eval_prompt_file: config.evalPromptFile } : {}),
+       ...(config.evalPromptFile ? { eval_response_format: config.evalResponseFormat } : {}),
++      ...(config.evalRoster?.length ? { eval_roster: config.evalRoster } : {}),
+       ...(config.evalModel ? { eval_model: config.evalModel } : {}) }, dirname(config.socketPath))
+     if (checked.modulePath !== config.modulePath || checked.socketPath !== config.socketPath ||
+         checked.evalSocketPath !== config.evalSocketPath ||
+         checked.evalResponseFormat !== config.evalResponseFormat ||
+         checked.evalModel?.id !== config.evalModel?.id ||
+         checked.evalModel?.provider !== config.evalModel?.provider) throw new Error('changed binding')
+-    if (evalMode && !checked.evalPromptFile) throw new Error('missing eval binding')
+-    const data = readFileSync(evalMode ? checked.evalPromptFile : checked.promptFile)
++    if (JSON.stringify(checked.evalRoster) !== JSON.stringify(config.evalRoster)) throw new Error('changed roster')
++    const candidate = Number.isInteger(evalMode) ? checked.evalRoster[evalMode] : null
++    if (evalMode !== false && evalMode !== true && !candidate) throw new Error('missing candidate')
++    if (evalMode === true && !checked.evalPromptFile) throw new Error('missing eval binding')
++    const data = readFileSync(candidate ? candidate.prompt_file : evalMode === true ? checked.evalPromptFile : checked.promptFile)
+     if (data.length > PROMPT_BYTES) throw new Error('prompt too large')
+     const systemPrompt = new TextDecoder('utf-8', { fatal: true }).decode(data)
+     if (!systemPrompt.trim() || systemPrompt.includes('\0')) throw new Error('invalid prompt')
+     const module = await import(pathToFileURL(checked.modulePath).href)
+     if (typeof module.registerNotebookResponder !== 'function') throw new Error('missing adapter entry')
+-    const handle = module.registerNotebookResponder(pi, { socketPath: evalMode ? checked.evalSocketPath : checked.socketPath,
+-      systemPrompt, ...(evalMode ? { responseFormat: checked.evalResponseFormat } : {}),
+-      ...(evalMode && checked.evalModel ? { fixedModel: checked.evalModel } : {}) })
++    const handle = module.registerNotebookResponder(pi, candidate ? {
++      socketPath: candidate.socket_path, systemPrompt, fixedModel: candidate.model, responseFormat: 'role-eval-v1',
++      evaluation: { role: candidate.role, reasoning: candidate.reasoning, outputTokens: candidate.output_tokens },
++    } : { socketPath: evalMode === true ? checked.evalSocketPath : checked.socketPath,
++      systemPrompt, ...(evalMode === true ? { responseFormat: checked.evalResponseFormat } : {}),
++      ...(evalMode === true && checked.evalModel ? { fixedModel: checked.evalModel } : {}) })
+     if (!handle || typeof handle.close !== 'function' || typeof handle.settled !== 'function') throw new Error('invalid adapter handle')
+     return handle
+   } catch {
+@@ -85,3 +151,34 @@ export async function installPiNotebook(pi, config, evalMode = false) {
+     throw new Error('notebook adapter could not be registered; check its owner-held modules and prompt')
+   }
+ }
++
++// All handles belong to this one extension/Pi registry. No new Pi process, login
++// store, request-level model selector or channel consumer is introduced.
++export async function installPiNotebooks(pi, config) {
++  const handles = []
++  let closing
++  const settled = () => Promise.all(handles.map(handle => handle.settled()))
++  const close = () => closing ||= (async () => {
++    const closed = await Promise.allSettled(handles.map(handle => Promise.resolve().then(() => handle.close())))
++    const drained = await Promise.allSettled(handles.map(handle => Promise.resolve().then(() => handle.settled())))
++    if ([...closed, ...drained].some(result => result.status === 'rejected')) throw new Error('notebook handles did not all settle')
++  })()
++  try {
++    const notebook = await installPiNotebook(pi, config)
++    if (notebook) handles.push(notebook)
++    const notebookEval = config?.evalPromptFile ? await installPiNotebook(pi, config, true) : null
++    if (notebookEval) handles.push(notebookEval)
++    const evaluations = []
++    for (let i = 0; i < (config?.evalRoster.length || 0); i++) {
++      const handle = await installPiNotebook(pi, config, i)
++      handles.push(handle); evaluations.push(handle)
++    }
++    // The adapter drains on session_shutdown and retains its hooks so a later
++    // session_start can bind again. close() means permanent extension disposal,
++    // not a session transition; only the owner/partial-failure path invokes it.
++    return { notebook, notebookEval, evaluations: Object.freeze(evaluations), close, settled }
++  } catch (error) {
++    await close()
++    throw error
++  }
++}
+diff --git a/mcp/tools/pi_harness_extension.mjs b/mcp/tools/pi_harness_extension.mjs
+index 2b6f8e5..8e851cb 100644
+--- a/mcp/tools/pi_harness_extension.mjs
++++ b/mcp/tools/pi_harness_extension.mjs
+@@ -25,7 +25,7 @@ import { fixedPath, knownHostsFile, privateFile, sshChannelEntry, SSH, SSH_TARGE
+ import { instanceId } from './runtime_manifest.mjs'
+ import { codexTurnText } from './harness_session.mjs'
+ import { feedCursor, followWakeFeed } from './wake_feed_client.mjs'
+-import { readNotebookConfig, installPiNotebook } from './pi_notebook_host.mjs'
++import { readNotebookConfig, installPiNotebooks } from './pi_notebook_host.mjs'
+ 
+ // Mirrors codex-channel-mcp.mjs's tools/list, which is what the fleet enforces. pi validates tool
+ // arguments against plain JSON Schema as well as TypeBox, so no TypeBox import is needed here.
+@@ -53,6 +53,9 @@ export function readPiClientConfig(path, id, own = homedir()) {
+   let raw
+   try { raw = JSON.parse(readFileSync(file.path, 'utf8')) } catch { throw new Error('client config is not valid JSON') }
+   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('client config must be a JSON object')
++  if (raw.notebook?.eval_roster !== undefined && (file.stat.mode & 0o077)) {
++    throw new Error('evaluation roster config must be owner-only (mode 0600)')
++  }
+   const text = JSON.stringify(raw)
+   if (Object.keys(raw).some(key => /nsec|bunker|secret|signer|private/i.test(key)) || /nsec1[02-9ac-hj-np-z]{20,}|bunker:\/\//i.test(text)) {
+     throw new Error('client config must not name a Nostr key or Bunker credential: nothing on this box signs')
+@@ -230,12 +233,27 @@ export default async function nvoyPiHarness(pi) {
+   const ssh = process.env.NVOY_HARNESS_SSH ? fixedPath(process.env.NVOY_HARNESS_SSH, 'ssh executable', null).path : SSH
+   // Pi awaits async extension factories. Registration finishes before its first
+   // session_start; the adapter itself starts nothing during import/register.
+-  const notebook = await installPiNotebook(pi, config.notebook)
+-  const notebookEval = config.notebook?.evalPromptFile ? await installPiNotebook(pi, config.notebook, true) : null
+-  const harness = createPiHarness({ pi, config, ssh })
+-  harness.notebook = notebook
+-  harness.notebookEval = notebookEval
+-  pi.on('session_start', (_event, ctx) => harness.start(ctx))
+-  pi.on('session_shutdown', () => harness.stop())
+-  return harness
++  const notebooks = await installPiNotebooks(pi, config.notebook)
++  try {
++    const harness = createPiHarness({ pi, config, ssh })
++    harness.notebook = notebooks.notebook
++    harness.notebookEval = notebooks.notebookEval
++    harness.notebookEvaluations = notebooks.evaluations
++    let disposed = false
++    const detach = []
++    harness.dispose = () => {
++      disposed = true
++      for (const remove of detach) if (typeof remove === 'function') remove()
++      harness.stop()
++      return notebooks.close()
++    }
++    // Session shutdown is restartable. Each notebook adapter owns its socket
++    // drain/rebind hooks; do not permanently close those registrations here.
++    detach.push(pi.on('session_start', (_event, ctx) => { if (!disposed) harness.start(ctx) }))
++    detach.push(pi.on('session_shutdown', () => harness.stop()))
++    return harness
++  } catch (error) {
++    await notebooks.close()
++    throw error
++  }
+ }
+diff --git a/test/pi-notebook-host.mjs b/test/pi-notebook-host.mjs
+index ef43d10..de7a4d0 100644
+--- a/test/pi-notebook-host.mjs
++++ b/test/pi-notebook-host.mjs
+@@ -1,11 +1,11 @@
+ import test from 'node:test'
+ import assert from 'node:assert/strict'
+-import { mkdtempSync, mkdirSync, chmodSync, writeFileSync, rmSync, symlinkSync, copyFileSync } from 'node:fs'
++import { mkdtempSync, mkdirSync, chmodSync, writeFileSync, rmSync, symlinkSync, copyFileSync, existsSync } from 'node:fs'
+ import net from 'node:net'
+ import { join } from 'node:path'
+ import { tmpdir } from 'node:os'
+ import { realpathSync } from 'node:fs'
+-import { readNotebookConfig, installPiNotebook } from '../mcp/tools/pi_notebook_host.mjs'
++import { readNotebookConfig, installPiNotebook, installPiNotebooks } from '../mcp/tools/pi_notebook_host.mjs'
+ 
+ async function fixture(fn) {
+   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pnb-')))
+@@ -20,6 +20,175 @@ async function fixture(fn) {
+   try { await fn({ dir, adapter, state, prompt, raw: { adapter_dir: adapter, prompt_file: prompt } }) }
+   finally { rmSync(dir, { recursive: true }) }
+ }
++
++function rosterFixture(dir) {
++  return ['planner','drawer','critic'].flatMap(role => {
++    const prompt = join(dir, role + '.txt')
++    writeFileSync(prompt, 'FIXED ' + role, {mode:0o600})
++    return [0,1].map(i => {
++      const parent = join(dir, role[0] + i)
++      mkdirSync(parent, {mode:0o700})
++      return {role, prompt_file:prompt, model:{provider:'openai-codex',id:'candidate-' + i},
++        reasoning:i ? 'high' : 'medium', output_tokens:2048,
++        socket_path:join(parent,'notebook-eval.sock')}
++    })
++  })
++}
++
++test('six fixed candidates are immutable; production options remain unchanged', async () => {
++  await fixture(async ({raw,state,dir,adapter}) => {
++    writeFileSync(join(adapter,'notebook_pi_lifecycle.mjs'), `
++      export function registerNotebookResponder(pi,options) {
++        pi.calls.push(options); const n=pi.calls.length;
++        return {close:async()=>{pi.closed.push(n)},settled:async()=>{pi.drained.push(n)}};
++      }`, {mode:0o600})
++    const rows=rosterFixture(dir), config=readNotebookConfig({...raw,eval_roster:rows},state)
++    rows[0].model.id='mutated'; rows[0].reasoning='low'
++    const handlers=[],pi={calls:[],closed:[],drained:[],on:(_name,fn)=>{handlers.push(fn)}}
++    const group=await installPiNotebooks(pi,config)
++    assert.equal(group.evaluations.length,6)
++    assert.equal(group.notebookEval,null)
++    assert.deepEqual(pi.calls[0],{socketPath:join(state,'notebook.sock'),systemPrompt:'TRUSTED NOTEBOOK PROMPT'})
++    assert.equal(new Set(pi.calls.map(call=>call.socketPath)).size,7)
++    assert(Object.isFrozen(config.evalRoster) && Object.isFrozen(config.evalRoster[0].model))
++    for(let i=0;i<6;i++) {
++      const row=config.evalRoster[i],call=pi.calls[i+1]
++      assert.deepEqual(call,{socketPath:row.socket_path,systemPrompt:'FIXED '+row.role,
++        fixedModel:row.model,responseFormat:'role-eval-v1',
++        evaluation:{role:row.role,reasoning:row.reasoning,outputTokens:row.output_tokens}})
++    }
++    assert.equal(handlers.length,0,'group must not own restartable session hooks')
++    await group.close(); await group.close()
++    assert.deepEqual(pi.closed,[1,2,3,4,5,6,7])
++    assert.deepEqual(pi.drained,[1,2,3,4,5,6,7])
++  })
++})
++
++test('roster rejects duplicates, missing roles, selectors and unsafe paths', async () => {
++  await fixture(async ({raw,state,dir}) => {
++    const rows=rosterFixture(dir)
++    const alter=(index,fields)=>rows.map((row,i)=>i===index?{...row,...fields}:row)
++    for(const bad of [[], rows.slice(0,5), [...rows,rows[0]], null,
++      alter(1,{socket_path:rows[0].socket_path}), alter(1,{reasoning:'medium',model:rows[0].model}),
++      alter(0,{role:'critic'}), alter(0,{role:'other'}), alter(0,{reasoning:'unknown'}),
++      alter(0,{output_tokens:true}),alter(0,{output_tokens:8193}),alter(0,{output_tokens:0}),
++      alter(0,{output_tokens:1.5}),alter(0,{model:{provider:'other',id:'x'}}),
++      alter(0,{model:{provider:'openai-codex',id:'x',extra:true}}),alter(0,{extra:true}),
++      alter(0,{socket_path:join(dir,'notebook.sock')}),alter(0,{socket_path:'relative/notebook-eval.sock'}),
++      alter(0,{socket_path:'/'+ 'x'.repeat(100)+'/notebook-eval.sock'}),
++      alter(0,{socket_path:join(dir,'absent','notebook-eval.sock')}),
++      alter(0,{prompt_file:raw.prompt_file})]) {
++      assert.throws(()=>readNotebookConfig({...raw,eval_roster:bad},state))
++    }
++    assert.throws(()=>readNotebookConfig({...raw,eval_roster:rows,eval_prompt_file:rows[0].prompt_file},state))
++    chmodSync(join(dir,'p0'),0o755)
++    assert.throws(()=>readNotebookConfig({...raw,eval_roster:rows},state),/owner-only/)
++    chmodSync(join(dir,'p0'),0o700)
++    const link=join(dir,'linked');symlinkSync(join(dir,'p0'),link)
++    assert.throws(()=>readNotebookConfig({...raw,eval_roster:alter(0,{socket_path:join(link,'notebook-eval.sock')})},state))
++    chmodSync(rows[0].prompt_file,0o644)
++    assert.throws(()=>readNotebookConfig({...raw,eval_roster:rows},state),/private/)
++  })
++})
++
++test('partial registration failure closes and settles every acquired handle', async () => {
++  await fixture(async ({raw,state,dir,adapter}) => {
++    writeFileSync(join(adapter,'notebook_pi_lifecycle.mjs'), `
++      export function registerNotebookResponder(pi,options) {
++        if(++pi.n===4)throw Error('PRIVATE DIAGNOSTIC');
++        const n=pi.n;
++        return {close:async()=>{pi.closed.push(n)},settled:async()=>{pi.drained.push(n)}};
++      }`, {mode:0o600})
++    const config=readNotebookConfig({...raw,eval_roster:rosterFixture(dir)},state)
++    const pi={n:0,closed:[],drained:[],on(){}}
++    await assert.rejects(installPiNotebooks(pi,config),/could not be registered/)
++    assert.deepEqual(pi.closed,[1,2,3]);assert.deepEqual(pi.drained,[1,2,3])
++  })
++})
++
++test('real six-variant host shares one registry, rebinds across sessions, and refuses unavailable model',
++  {skip:!process.env.HERD_BOARD_ADAPTER_TEST_DIR}, async () => {
++  await fixture(async ({raw,state,dir,adapter}) => {
++    for(const name of ['notebook_pi_lifecycle.mjs','notebook_pi_responder.mjs','notebook_pi_socket.mjs']) {
++      copyFileSync(join(process.env.HERD_BOARD_ADAPTER_TEST_DIR,name),join(adapter,name))
++    }
++    const rows=rosterFixture(dir),config=readNotebookConfig({...raw,eval_roster:rows},state)
++    const handlers=new Map(),calls=[],finds=[]
++    const pi={on(name,fn){const list=handlers.get(name)||[];list.push(fn);handlers.set(name,list);return ()=>{};}}
++    const live={id:'live',provider:'openai-codex',input:['image','text']}
++    let unavailable=false
++    const registry={
++      find(provider,id){finds.push(this);return unavailable && id==='candidate-1' ? undefined : {...live,provider,id}},
++      isUsingOAuth(){assert.equal(this,registry);return true},
++      streamSimple(m,context,options){
++        assert.equal(this,registry);calls.push({model:m.id,context,options})
++        const text='{"fixture":true}'
++        return {async *[Symbol.asyncIterator](){yield {type:'text_delta',delta:text}},result:async()=>({
++          role:'assistant',provider:m.provider,model:m.id,stopReason:'stop',content:[{type:'text',text}],usage:{output:10}})}
++      },
++    }
++    const group=await installPiNotebooks(pi,config)
++    const exchange=socketPath=>new Promise((resolve,reject)=>{
++      const socket=net.createConnection(socketPath),parts=[]
++      socket.setTimeout(1500,()=>socket.destroy(Error('test timeout')))
++      socket.on('error',reject)
++      socket.on('connect',()=>socket.write(JSON.stringify({request_id:'notebook-'+'c'.repeat(32),context:'fixture',deadline_ms:1000,
++        image:{mime_type:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG9kAAAAASUVORK5CYII='}})+'\n'))
++      socket.on('data',chunk=>{parts.push(chunk);const data=Buffer.concat(parts).toString('utf8');
++        if(data.endsWith('\n')){socket.end();try{resolve(JSON.parse(data))}catch(error){reject(error)}}})
++    })
++    try {
++      for(const fn of handlers.get('session_start'))fn({},{model:live,modelRegistry:registry})
++      await group.settled()
++      assert.equal(finds.length,6);assert(finds.every(value=>value===registry))
++      const prod=await exchange(config.socketPath)
++      assert.equal(prod.response_format,'semantic-v1');assert.equal(prod.metrics.model,'live')
++      for(const row of rows) {
++        const response=await exchange(row.socket_path)
++        assert.equal(response.response_format,'role-eval-v1')
++        assert.equal(response.metrics.model,row.model.id)
++        assert.equal(response.evaluation.role,row.role)
++        const call=calls.at(-1)
++        assert.equal(call.options.reasoning,row.reasoning)
++        assert.equal(call.options.maxTokens,row.output_tokens)
++        assert.equal(call.context.systemPrompt,'FIXED '+row.role)
++        assert.equal(call.context.messages.length,1);assert.equal(call.context.tools.length,0)
++      }
++      // Session shutdown is not extension disposal. All seven sockets drain,
++      // then the same registered handles must bind again in this Pi process.
++      for(let session=0;session<2;session++) {
++        for(const fn of handlers.get('session_shutdown'))await fn({},{model:live,modelRegistry:registry})
++        await group.settled()
++        for(const path of [config.socketPath,...rows.map(row=>row.socket_path)])assert.equal(existsSync(path),false)
++        const nextLive={...live,id:'live-session-'+session}
++        for(const fn of handlers.get('session_start'))await fn({},{model:nextLive,modelRegistry:registry})
++        await group.settled()
++        assert.equal(existsSync(config.socketPath),true,'production must rebind after session shutdown')
++        assert.equal((await exchange(config.socketPath)).metrics.model,nextLive.id)
++        for(const row of rows) {
++          const response=await exchange(row.socket_path)
++          assert.equal(response.metrics.model,row.model.id)
++          assert.equal(response.evaluation.role,row.role)
++          assert.equal(calls.at(-1).options.reasoning,row.reasoning)
++          assert.equal(calls.at(-1).context.messages.length,1)
++        }
++      }
++      unavailable=true
++      for(const fn of handlers.get('model_select'))fn({model:live},{model:live,modelRegistry:registry})
++      await group.settled()
++      for(const row of rows)assert.equal(existsSync(row.socket_path),row.model.id==='candidate-0')
++      assert.equal((await exchange(config.socketPath)).metrics.model,'live')
++      assert.equal((await exchange(rows[0].socket_path)).metrics.model,'candidate-0')
++      await assert.rejects(exchange(rows[1].socket_path),/ENOENT/)
++    } finally {await group.close()}
++    for(const path of [config.socketPath,...rows.map(row=>row.socket_path)])assert.equal(existsSync(path),false)
++    const before=finds.length
++    for(const fn of handlers.get('session_start'))await fn({},{model:live,modelRegistry:registry})
++    await group.settled()
++    assert.equal(finds.length,before,'permanently disposed registrations cannot restart')
++    for(const path of [config.socketPath,...rows.map(row=>row.socket_path)])assert.equal(existsSync(path),false)
++  })
++})
+ test('absent config is inert; configured adapter receives only fixed prompt and derived socket', async () => {
+   assert.equal(readNotebookConfig(undefined, '/unused'), null)
+   assert.equal(await installPiNotebook({}, null), null)
+diff --git a/test/pi-harness.mjs b/test/pi-harness.mjs
+index 9b60166..fbb39d9 100644
+--- a/test/pi-harness.mjs
++++ b/test/pi-harness.mjs
+@@ -307,7 +307,12 @@ await waitFor(() => !existsSync(lockPath), 5000)
+ const notebookDir = join(root, 'notebook-adapter')
+ mkdirSync(notebookDir, { mode: 0o700 })
+ for (const name of ['notebook_pi_responder.mjs', 'notebook_pi_socket.mjs']) secretFile(join(notebookDir, name), 'export {};\n')
+-secretFile(join(notebookDir, 'notebook_pi_lifecycle.mjs'), 'export function registerNotebookResponder(pi, options) { pi.notebookOptions = options; return { settled: async () => {}, close: async () => {} }; }\n')
++secretFile(join(notebookDir, 'notebook_pi_lifecycle.mjs'), `export function registerNotebookResponder(pi, options) {
++  pi.notebookOptions = options;
++  (pi.notebookRegistrations ||= []).push(options);
++  return { settled: async () => { pi.notebookDrained = (pi.notebookDrained || 0) + 1 },
++    close: async () => { pi.notebookClosed = (pi.notebookClosed || 0) + 1 } };
++}\n`)
+ const promptFile = secretFile(join(root, 'notebook-system-prompt.txt'), 'FIXED NOTEBOOK TEACHING PROMPT')
+ const notebookConfig = clientConfig({ ...client, notebook: { adapter_dir: notebookDir, prompt_file: promptFile } })
+ const parsedNotebook = readPiClientConfig(notebookConfig, 'pd-test', own)
+@@ -317,6 +322,27 @@ const pi3 = fakePi(), harness3 = await nvoyPiHarness(pi3)
+ ok('owner opt-in registers the notebook adapter before session startup without starting another feed',
+   pi3.notebookOptions?.systemPrompt === 'FIXED NOTEBOOK TEACHING PROMPT' && pi3.notebookOptions.socketPath === join(stateDir, 'notebook.sock') &&
+   harness3.notebook && !existsSync(lockPath) && pi3.sent.length === 0 && pi3.tools.size === PI_CHANNEL_TOOLS.length)
++await harness3.dispose()
++const evalRoster = ['planner','drawer','critic'].flatMap(role => [0,1].map(i => {
++  const parent=join(root,role[0]+i);mkdirSync(parent,{mode:0o700})
++  return {role,prompt_file:secretFile(join(parent,'prompt.txt'),'FIXED '+role),
++    model:{provider:'openai-codex',id:'candidate-'+i},reasoning:i?'high':'medium',
++    output_tokens:2048,socket_path:join(parent,'notebook-eval.sock')}
++}))
++const roleClient={...client,notebook:{adapter_dir:notebookDir,prompt_file:promptFile,eval_roster:evalRoster}}
++let looseRosterRefused=false
++try {readPiClientConfig(clientConfig(roleClient,0o644),'pd-test',own)} catch(error) {looseRosterRefused=/owner-only/.test(error.message)}
++ok('a six-role roster requires an owner-only client config',looseRosterRefused)
++process.env.NVOY_PI_HARNESS_CONFIG=clientConfig(roleClient)
++const pi4=fakePi(),harness4=await nvoyPiHarness(pi4)
++ok('extension retains six evaluators beside production and starts no extra feed',
++  harness4.notebookEvaluations.length===6 && pi4.notebookRegistrations.length===7 &&
++  pi4.notebookRegistrations[0].socketPath===join(stateDir,'notebook.sock') &&
++  !existsSync(lockPath) && pi4.sent.length===0 && pi4.tools.size===PI_CHANNEL_TOOLS.length)
++await pi4.stop();await harness4.stop()
++ok('session shutdown and harness stop preserve notebook registrations',!pi4.notebookClosed && !pi4.notebookDrained)
++await harness4.dispose();await harness4.dispose()
++ok('permanent extension disposal closes and settles all seven handles exactly once',pi4.notebookClosed===7 && pi4.notebookDrained===7)
+ process.env.NVOY_PI_HARNESS_CONFIG = configPath
+ 
+ rmSync(root, { recursive: true, force: true })

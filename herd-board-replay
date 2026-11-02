@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""herd-board-replay [FILE...]: run captured model replies through the server offline, as far as the tablet.
+
+Each FILE is a reply envelope as the server keeps them (~/.cache/herd-board/replies/, rejected-replies/). With no FILE,
+the committed corpus in replay/ is used. Every device call is mocked (the test fixture in test_notebook_lesson_server),
+so nothing here touches the tablet, pidog or the live trace. One line per reply: whether it would reach the page, and
+the blocks it would place (ink, text, media), or why it was held. Exit status 1 if any reply was held.
+Run before every restart or deploy, with the on-tablet checklist in SMOKE_TEST.md."""
+import glob
+import json
+import os
+import sys
+import tempfile
+from unittest.mock import patch
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+scratch = tempfile.mkdtemp(prefix='herd-board-replay-')
+os.environ['HERD_BOARD_TRACE'] = os.path.join(scratch, 'trace.jsonl')  # never the live trace
+
+import test_notebook_lesson_server as fixture  # noqa: E402
+
+
+def replay(case, envelope):
+	s = case.s
+	with case.server_job(envelope['text'], response_format=envelope.get('response_format')) as (_, registered, _), \
+			patch.object(s, 'ink_fallbacks', set()):
+		if s.answers.get(fixture.PATH) != 'ready':
+			return False, f"not ready: {s.answers.get(fixture.PATH)} {s.reply_errors.get(fixture.PATH) or ''}".strip()
+		try:
+			reply = s.native_text(fixture.PATH, ink_supported=True)
+			if 'import_source' in reply:
+				reply = s.native_text(fixture.PATH, ink_supported=True, imported={'request': fixture.REQUEST, 'doc': fixture.PAGE})
+		except ValueError as e:
+			return False, f'held: {e}'
+		kinds = [b['kind'] for b in reply.get('blocks', [])]
+		left_out = fixture.REQUEST in s.ink_fallbacks
+		return not left_out, ' '.join(kinds) + (' (drawing left out)' if left_out else '') + (f' registered {registered.call_count}' if registered.call_count else '')
+
+
+def main(paths):
+	paths = paths or sorted(glob.glob(os.path.join(HERE, 'replay', '*.json')))
+	if not paths:
+		sys.exit('no replies to replay')
+	fixture.LessonServerTest.setUpClass()
+	case = fixture.LessonServerTest('test_native_response_contains_interleaved_stages_and_registered_equation')
+	held = 0
+	for path in paths:
+		try:
+			with open(path) as stream:
+				envelope = json.load(stream)
+			ok, detail = replay(case, envelope)
+		except Exception as e:  # a replay that crashes is a failure to report, not a reason to stop
+			ok, detail = False, f'crashed: {type(e).__name__}: {e}'
+		held += not ok
+		mode = ''
+		try:
+			mode = json.loads(envelope['text']).get('mode', '')
+		except Exception:
+			pass
+		print(f"{'ok  ' if ok else 'HELD'}  {os.path.basename(path)[:40]:40}  {mode:7}  {detail[:160]}")
+	print(f'{len(paths) - held}/{len(paths)} would reach the page')
+	return 1 if held else 0
+
+
+if __name__ == '__main__':
+	sys.exit(main(sys.argv[1:]))

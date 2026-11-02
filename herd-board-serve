@@ -1,0 +1,3322 @@
+#!/usr/bin/env python3
+"""herd-board-serve: the herd's state for the reMarkable's Cyber Times (tools/herd-board), over HTTP.
+
+  herd-board-serve [HOST] [PORT]   GET /herd.json[?since=V]: {"v", "at", "edition", "day", "agents": [{name, status,
+                                   task, said, section, recent}]}, the ones that need the owner first; "at" is when it last
+                                   changed. With since, it holds the request until the herd differs from V, or HOLD
+                                   seconds pass (a long poll). Default 127.0.0.1:8791.
+  GET /thread.json?pane=P[&since=V]: {"v", "desks": [{name, pane, status}], "name", "status", "items": [{who, text,
+                                   at}]}: the desks to choose from and the conversation with one (the last THREAD
+                                   turns: what the owner said, and what the agent last wrote before the next), a long
+                                   poll as herd.json's. For Correspondence (ui/letters.qml).
+
+Before noon it is the morning edition and each Claude Code agent's section is its work yesterday; after, today's so
+far. A section ({"headline", "body"}) is written by Gemini (MODEL, key in KEYF) from what the owner asked and what the
+agent wrote back that day, never tool calls or their output: today's again at most every WRITE seconds once there is
+more, a past day's once (kept in CACHE). The day's log goes from its start, so each rewrite begins as the last did and
+Gemini's implicit cache can bill that part cheaper. Every request is a line in GEMINI/calls.log (tokens and status,
+never text), as herd-voice's and herd-summarise's are; a 429 holds all three off Gemini for its retry delay. Everything else is read-only: `herdr agent list` every POLL seconds, and the
+agents' session transcripts. recent is an agent's last few exchanges, [{"asked", "replied"}], once its transcript
+has been read for a section.
+"""
+import base64, glob, hashlib, io, json, math, os, re, shlex, struct, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request, uuid
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ink import append, blank, blocks, pen_text, render_page, strokes, svg_lines
+from notebook_replies import ReplyReader, notebook_prompt
+from notebook_media import AssetStore
+from notebook_auth import NotebookAuth, load_credentials, protected_route, preservation_key
+from notebook_device import DeviceContext
+from notebook_view_audit import ViewAudit
+from notebook_native_probe import NativeProbe
+from notebook_ink_catalog import load_catalog, FACTORIES
+from notebook_lesson_native import has_lesson, prepare_native_lesson, lesson_source_archive, remap_imported_lesson
+from notebook_lesson_native import prepare_semantic_reply
+from notebook_semantic_reply import parse_semantic_reply, _picture
+import notebook_lesson
+from notebook_delivery import delivery_options, semantic_delivery, revision_pending, with_delivery
+from notebook_model_transport import call_notebook_model, validate_model_result, ModelTransportError
+from notebook_rejected_reply import retain_rejected_reply, retain_reply
+from notebook_story_generation import generate_notebook_story
+from notebook_visual_input import notebook_visual_input, LATEST_IMAGE_CONTEXT
+from notebook_ink_runs import InkRuns
+import notebook_trace as trace
+import notebook_image_model
+import notebook_handwritten_note
+import notebook_messages
+from tablet_live import capture as live_capture, draw_paths as live_draw, writing_box, aligned_writing_box, exposed_writing_box, notebook_crop, png_bytes as live_png, settled_frame
+from tablet_live import capture_region as live_capture_region
+from tablet_transport import tablet_ssh
+
+TYPE = ("/System/Library/Fonts/Menlo.ttc", 0)   # the desk's answer on the page: a terminal's type, under the owner's hand
+from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ORDER = {"blocked": 0, "working": 1, "done": 2, "idle": 3}
+SAID = 2000   # characters of an agent's last reply
+HOLD, POLL, WRITE = 50, 2, 900
+RECENT = 3    # exchanges in Developing News
+THREAD, REPLY = 12, 3000   # turns in a Correspondence thread; characters of a reply
+MODEL = os.environ.get("HERD_BOARD_MODEL", "gemini-3.5-flash-lite")
+LOG = 120_000   # characters of a day's log Gemini sees: from its start, or its last LOG once it is longer
+GEMINI = os.path.expanduser("~/.local/state/gemini")   # this host's Gemini callers: calls.log, hold-until
+KEYF = os.path.expanduser("~/.nvoy-harness/credentials/gemini-api-key")
+CACHE = os.path.expanduser("~/.cache/herd-board")
+TRACE = os.path.expanduser("~/.local/state/herd-voice/trace.log")   # what the R1 was told on a walk (herd-voice)
+RECORDINGS = os.path.expanduser("~/Recordings")                     # the R1 recorder's notes (herd-record)
+R1 = os.environ.get("R1", "root@r1")
+R1_SOCK = os.path.expanduser("~/.ssh/s/r1-agent.sock")
+TABLET = os.environ.get("TABLET", "root@remarkable.lan")   # its notebooks "To NAME" hold the letters, in its own pen
+NATIVE_REPLY_CLEARANCE = 20  # beyond the ink crop's 30px padding; was 45
+device_context = DeviceContext()  # read-only native geometry telemetry, NOT a control lease
+view_audit = ViewAudit()  # explicit local-only view moves on the isolated audit fixture
+native_probe = NativeProbe(claims=os.path.expanduser('~/.buzz/OUTBOX/.native-clone-claims'))
+native_ink_runs = InkRuns(os.path.expanduser('~/.buzz/OUTBOX/.native-ink-runs'), text_key=preservation_key)
+INK_CATALOG = os.path.expanduser('~/.buzz/OUTBOX/native-storyboard-catalog-v2.json')
+# Explicit staged rollout. Empty by default; never infer readiness from a title.
+LESSON_NOTEBOOKS = os.environ.get('HERD_BOARD_LESSON_NOTEBOOKS')
+LESSON_CONFIG = os.path.join(os.path.dirname(os.path.realpath(__file__)), '.notebook-lessons.json')
+LESSON_SOURCE_TEMPLATE = '905df7ae-ff54-46b9-a71e-45bb02bef638'
+lesson_imports = {}  # one held pre-insertion bundle per destination; no paste authority
+WALK_GAP, WALKS, R1_EVERY = 1200, 6, 30   # quiet that ends a walk; walks kept; seconds between R1 readings
+SECTION_SYS = """You are a section writer for The Cyber Times, a newspaper about the work of AI coding agents for their \
+owner, James. Write the named agent's section for the day given, from its log: what James asked and what the agent \
+reported back. Reply with JSON only: {"headline": "...", "body": "..."}. The headline: at most 9 words, newspaper \
+style. The body: 110 to 160 words of plain prose in the past tense, third person, naming the agent: what it worked on, \
+what it finished, what is still open. Only what the log says; no markdown."""
+READ_SYS = """You read a handwritten note from an e-ink tablet. Reply with JSON only: {"text": "..."}: its words as \
+written, in reading order, as one paragraph with ordinary punctuation. Mathematics is content, not doodling: keep \
+every symbol, written linearly, e.g. ∫_0^x t dt, Σ_{i=1}^n i, x^2/2, √2, with integral and sum signs, limits, \
+exponents and fractions in place. If there is a drawing (a graph, a diagram, a sketch), end with a short \
+bracketed note of what it visibly shows, e.g. [drawing: unlabeled axes with a curve rising and getting steeper to the right]. \
+Describe geometry, not an inferred mathematical model: an unlabeled curved graph does not establish exponential, quadratic, logarithmic or other exact growth. \
+Preserve any written axis labels, scales and equations; never invent them. Leave out scribbled-out words, doodles and the ruled lines. If nothing is legible: \
+{"text": ""}."""
+NUMBER_READ_SYS = """Read this handwritten note independently. Reply with JSON only: {"text": "..."}, \
+the complete note in reading order. Transcribe; do not solve or answer it. Check every numeral against the \
+actual pen shape, especially 1 versus 7, 0 versus 6, and 3 versus 8. Preserve decimal points, signs, fractions, \
+limits and exponents. Do not infer an expected calculation or replace a number with a more likely one. \
+Ignore printed rules. If a symbol is genuinely unclear, write [unclear] in its place."""
+WALK_SYS = """You are the editor of The Walk Edition, a one-page newspaper about a walk James took while talking to \
+his AI coding agents through a pocket device, the R1, with earbuds in. From the log (what he said, which agent he said \
+it to, and what was read back to him) reply with JSON only: {"headline": "...", "lede": "...", "decisions": ["..."]}. \
+The headline: at most 9 words, newspaper style. The lede: 60 to 100 words of plain prose in the past tense. The \
+decisions: up to 5 short lines, each a decision made or a piece of work set going out loud. Only what the log says; \
+no markdown."""
+
+cache, last, lock = {}, {"v": "", "at": 0}, threading.Lock()
+logs = {}       # session id -> {"off": bytes read, "items": [(epoch, who, text)]}
+sections = {}   # (session id, day) -> {"headline", "body", "n": items written from, "t": when}
+tried = {}      # (session id, day) -> when a section was last asked for: a failure waits WRITE too
+letters = []    # [{"name", "at", "text"}]: what the owner wrote to a desk from the tablet, sent to its pane
+walks = {}      # a walk's start (epoch) -> {"headline", "lede", "decisions", "n": lines written from, "t": when}
+r1 = {"t": 0, "s": {}}
+
+
+def agent_list():
+	r = subprocess.run(["herdr", "agent", "list"], capture_output=True, text=True, timeout=10)
+	return json.loads(r.stdout)["result"]["agents"]
+
+
+def transcript(sid):
+	p = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}.jsonl"))
+	return p[0] if p else None
+
+
+def said(sid):
+	path = transcript(sid)
+	if not path:
+		return ""
+	key = (os.path.getmtime(path), os.path.getsize(path))
+	if cache.get(sid, (None,))[0] == key:
+		return cache[sid][1]
+	cache[sid] = (key, last_text(path))
+	return cache[sid][1]
+
+
+def last_text(path):
+	with open(path, "rb") as f:
+		f.seek(max(0, os.path.getsize(path) - 400_000))
+		lines = f.read().splitlines()
+	for line in reversed(lines):
+		try:
+			e = json.loads(line)
+		except ValueError:
+			continue
+		if e.get("type") != "assistant":
+			continue
+		text = " ".join(b.get("text", "") for b in e.get("message", {}).get("content", [])
+			if isinstance(b, dict) and b.get("type") == "text").strip()
+		if text:
+			text = " ".join(text.replace("**", "").replace("`", "").split())
+			return text if len(text) <= SAID else text[:SAID].rsplit(" ", 1)[0] + "…"
+	return ""
+
+
+def herd():
+	agents, (edition, day) = [], edition_day()
+	for a in agent_list():
+		s = a.get("agent_session") or {}
+		sid = s["value"] if a.get("agent") == "claude" and s.get("kind") == "id" else None
+		sec = sections.get((sid, day))
+		agents.append({
+			"name": a.get("name") or a.get("agent", "?"),
+			"status": a.get("agent_status", "?"),
+			"task": a.get("terminal_title_stripped", ""),
+			"said": said(sid) if sid else "",
+			"section": {"headline": sec["headline"], "body": sec["body"]} if sec else None,
+			"recent": recent(sid) if sid else [],
+			"letters": [{"at": l["at"], "text": l["text"]} for l in letters
+				if l["name"] == (a.get("name") or a.get("agent")) and l["at"] >= time.time() - 86400][-2:],
+			"pane": a.get("pane_id"),
+			"sid": sid,
+		})
+	agents.sort(key=lambda a: (ORDER.get(a["status"], 4), a["section"] is None, a["name"]))
+	v = hashlib.sha1(json.dumps([edition, agents]).encode()).hexdigest()[:12]
+	with lock:
+		if v != last["v"]:
+			last.update(v=v, at=int(time.time()))
+		return {"v": v, "at": last["at"], "tz": tz(), "edition": edition, "day": day, "agents": agents}
+
+
+def recent(sid):
+	"""The last RECENT exchanges: each thing the owner asked, and the last thing the agent wrote before the next."""
+	ex = []
+	for t, who, text in logs.get(sid, {}).get("items", []):
+		if who == "James":
+			ex.append({"asked": short(text, 300), "replied": ""})
+		elif ex:
+			ex[-1]["replied"] = short(text, 600)
+	return ex[-RECENT:]
+
+
+def tz():
+	"""This Mac's offset from UTC in seconds, for the tablet, which keeps UTC."""
+	return int(datetime.now().astimezone().utcoffset().total_seconds())
+
+
+def short(t, n):
+	return t if len(t) <= n else t[:n].rsplit(" ", 1)[0] + "…"
+
+
+def edition_day():
+	now = datetime.now()
+	if now.hour < 12:
+		return "Morning", (now - timedelta(days=1)).strftime("%Y-%m-%d")
+	return ("Afternoon" if now.hour < 17 else "Evening"), now.strftime("%Y-%m-%d")
+
+
+# --- the sections
+
+def text_of(content):
+	if isinstance(content, str):
+		return content
+	return " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+
+
+def clean(t):
+	t = re.sub(r"<([a-z-]+)[^>]*>.*?</\1>", " ", t, flags=re.S)   # system reminders, pasted blocks, command tags
+	return " ".join(t.replace("**", "").replace("`", "").split())
+
+
+def read_log(sid, since):
+	"""What the owner asked and the agent wrote in session sid since epoch since, read on from where we stopped."""
+	path = transcript(sid)
+	if not path:
+		return []
+	lg = logs.setdefault(sid, {"off": 0, "items": []})
+	with open(path, "rb") as f:
+		f.seek(lg["off"])
+		for line in f:
+			if not line.endswith(b"\n"):
+				break
+			lg["off"] += len(line)
+			if b'"timestamp"' not in line or (b'"type":"user"' not in line and b'"type":"assistant"' not in line):
+				continue
+			try:
+				e = json.loads(line)
+				t = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+			except (ValueError, KeyError):
+				continue
+			if t < since or e.get("type") not in ("user", "assistant"):
+				continue
+			text = clean(text_of(e.get("message", {}).get("content", "")))
+			if text and not text.startswith("[Request interrupted"):
+				lg["items"].append((t, "James" if e["type"] == "user" else "agent", text[:700]))
+	lg["items"] = [i for i in lg["items"] if i[0] >= since]
+	return lg["items"]
+
+
+def held():
+	try:
+		return float(open(f"{GEMINI}/hold-until").read()) > time.time()
+	except (OSError, ValueError):
+		return False
+
+
+def ledger(status, usage, start, hold=0):
+	u = usage or {}
+	try:
+		os.makedirs(GEMINI, exist_ok=True)
+		if hold:
+			with open(f"{GEMINI}/hold-until", "w") as f:
+				f.write(str(time.time() + hold))
+		with open(f"{GEMINI}/calls.log", "a") as f:
+			f.write(f"{time.strftime('%F %T')} herd-board {MODEL} {status} in={u.get('promptTokenCount', 0)} "
+				f"cached={u.get('cachedContentTokenCount', 0)} out={u.get('candidatesTokenCount', 0)} "
+				f"think={u.get('thoughtsTokenCount', 0)} {time.time() - start:.2f}s{f' hold={hold:g}s' if hold else ''}\n")
+	except OSError:
+		pass
+
+
+def gemini(system, text, png=None, _json_retry=False):
+	"""Gemini's JSON answer to text, and with png (base64) that image too."""
+	parts = [{"text": text}] + ([{"inline_data": {"mime_type": "image/png", "data": png}}] if png else [])
+	config = {"maxOutputTokens": 700, "temperature": 0.4, "responseMimeType": "application/json",
+		"thinkingConfig": {"thinkingLevel": "minimal"}}
+	if png is not None:
+		config["responseSchema"] = {"type": "OBJECT", "properties": {"text": {"type": "STRING"}}, "required": ["text"]}
+		system += " Use literal Unicode math and linear notation, never TeX backslash commands."
+	body = json.dumps({"systemInstruction": {"parts": [{"text": system}]},
+		"contents": [{"role": "user", "parts": parts}],
+		"generationConfig": config}).encode()
+	with open(KEYF) as credential:
+		api_key = credential.read().strip()
+	req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
+		data=body, headers={"content-type": "application/json", "x-goog-api-key": api_key})
+	start = time.time()
+	try:
+		with urllib.request.urlopen(req, timeout=40) as r:
+			d = json.load(r)
+	except urllib.error.HTTPError as e:
+		hold = 0
+		if e.code == 429:   # its retry delay, else a minute
+			try:
+				hold = float(next(x["retryDelay"] for x in json.loads(e.read())["error"]["details"] if "retryDelay" in x).rstrip("s"))
+			except (OSError, ValueError, KeyError, TypeError, StopIteration):
+				hold = 60
+		ledger(e.code, None, start, hold)
+		raise
+	except OSError as e:
+		ledger(type(e).__name__, None, start)
+		raise
+	ledger(200, d.get("usageMetadata"), start)
+	c = (d.get("candidates") or [{}])[0]
+	try:
+		result = json.loads("".join(p.get("text", "") for p in c.get("content", {}).get("parts", [])))
+		if png is not None and (not isinstance(result, dict) or set(result) != {"text"} or not isinstance(result["text"], str)):
+			raise ValueError("invalid handwriting reader response")
+		return result
+	except (ValueError, TypeError):
+		if png is not None and not _json_retry:
+			# Retry the image read once, BEFORE creating/sending an agent request.
+			# Never repair escape sequences by guessing the intended mathematics.
+			return gemini(system + " Return one valid JSON object containing only a text string.", text, png, _json_retry=True)
+		raise ValueError("Could not read the handwriting safely; your writing is unchanged") from None
+
+
+def write(name, sid, day):
+	start = datetime.strptime(day, "%Y-%m-%d").timestamp()
+	items = [i for i in read_log(sid, start) if i[0] < start + 86400]
+	old = sections.get((sid, day))
+	today = day == datetime.now().strftime("%Y-%m-%d")
+	if not items or held() or (old and (len(items) == old["n"] or not today or time.time() - old["t"] < WRITE)):
+		return False
+	if time.time() - tried.get((sid, day), 0) < WRITE:
+		return False
+	tried[(sid, day)] = time.time()
+	log = "\n".join(f"{datetime.fromtimestamp(t):%H:%M} {name if who == 'agent' else who}: {x}" for t, who, x in items)
+	s = gemini(SECTION_SYS, f"Agent: {name}\nDay: {day}\n\nLog:\n{log if len(log) <= LOG else log[-LOG:]}")
+	sections[(sid, day)] = {"headline": str(s["headline"]), "body": str(s["body"]), "n": len(items), "t": time.time()}
+	with open(f"{CACHE}/sections.json", "w") as f:
+		json.dump([[k[0], k[1], v] for k, v in sections.items()], f)
+	return True
+
+
+def writer():
+	while True:
+		try:
+			_, day = edition_day()
+			for a in herd()["agents"]:
+				if a["sid"]:
+					try:
+						if write(a["name"], a["sid"], day):
+							time.sleep(5)   # the key is rate limited
+					except Exception as e:
+						print(f"herd-board-serve: no section for {a['name']}: {type(e).__name__}: {e}", file=sys.stderr)
+			for w in walk_list():
+				try:
+					if write_walk(w):
+						time.sleep(5)
+				except Exception as e:
+					print(f"herd-board-serve: no walk edition: {type(e).__name__}: {e}", file=sys.stderr)
+		except Exception as e:
+			print(f"herd-board-serve: writer: {type(e).__name__}: {e}", file=sys.stderr)
+		time.sleep(60)
+
+
+# --- letters: the owner's handwriting, read by Gemini, sent to a desk
+
+def numeric_read_signature(text):
+	"""Compare literal numbers across ordinary OCR spelling/notation variants.
+
+	Do not solve or infer a missing value. Compound number words deliberately
+	remain conservative; this only canonicalizes explicit small numbers/powers.
+	"""
+	words = 'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split()
+	values = {word: str(i) for i, word in enumerate(words)}
+	text = re.sub(r'\b(?:' + '|'.join(words) + r')\b',
+		lambda match: values[match.group().lower()], text, flags=re.I)
+	text = re.sub(r'\bsquared\b', '^2', text, flags=re.I)
+	text = re.sub(r'\bcubed\b', '^3', text, flags=re.I)
+	text = text.replace('²', '^2').replace('³', '^3')
+	return re.findall(r'\d+(?:[.,]\d+)?', text)
+
+
+def read_letter(png):
+	if held():
+		raise RuntimeError("Gemini is resting after a 429; try again in a minute")
+	first = " ".join(str(gemini(READ_SYS, "The note:", png).get("text", "")).split())
+	# A single misread digit silently changes the question the agent answers.
+	# Check numeric notes against a second, unprimed image reading. Disagreement
+	# becomes an inline clarification, never a guessed arithmetic answer.
+	if numeric_read_signature(first):
+		second = " ".join(str(gemini(NUMBER_READ_SYS, "The note:", png).get("text", "")).split())
+		if (numeric_read_signature(first) != numeric_read_signature(second)
+			or "[unclear" in second.lower()):
+			return f"[unclear handwriting: one reading was {first!r}; another was {second!r}]"
+	return first
+
+
+def send(pane, text):
+	"""text into an agent's pane, and Enter. Only a pane herdr lists as an agent's now."""
+	a = next((a for a in agent_list() if a.get("pane_id") == pane), None)
+	text = " ".join(text.split())
+	if not a or not text:
+		raise ValueError("no such desk, or nothing to send")
+	subprocess.run(["herdr", "pane", "run", pane, text], check=True, capture_output=True, timeout=10)
+	return a.get("name") or a.get("agent", "?")
+
+
+def post_letter(pane, text):
+	name, at = send(pane, text), int(time.time())
+	if pane in pages:
+		threading.Thread(target=answer, args=(pane, pages.pop(pane), at), daemon=True).start()
+	letters.append({"name": name, "at": int(time.time()), "text": " ".join(text.split())})
+	del letters[:-200]
+	with open(f"{CACHE}/letters.json", "w") as f:
+		json.dump(letters, f)
+	return name
+
+
+# --- the tablet's notebooks: a letter is the latest page of "To NAME", written with the tablet's own pen
+
+XOCHITL = "/home/root/.local/share/remarkable/xochitl"
+PAGE_FIND = r"""cd /home/root/.local/share/remarkable/xochitl || exit 1
+for m in *.metadata; do
+	grep -q '"deleted": true' "$m" && continue
+	grep -q '"parent": "trash"' "$m" && continue
+	grep -qiF "\"visibleName\": \"to $NAME\"" "$m" || continue
+	f=$(ls -t "${m%.metadata}"/*.rm 2>/dev/null | head -n 1)
+	[ -n "$f" ] || { echo none; exit 0; }
+	echo "$f"; cat "$f"; exit 0
+done
+echo missing"""
+
+
+def tablet(script, data=b""):
+	r = subprocess.run([*tablet_ssh(TABLET), script], input=data,
+		capture_output=True, timeout=30, env={**os.environ, "SSH_AUTH_SOCK": R1_SOCK})
+	if (r.returncode == 255 and TABLET == "root@remarkable.lan"
+		and b"Could not resolve hostname remarkable.lan" in r.stderr):
+		# Same tablet, mDNS spelling; require its existing known host identity.
+		# No network configuration change and no trust-on-first-use fallback.
+		r = subprocess.run([*tablet_ssh("root@remarkable.local"), script], input=data, capture_output=True, timeout=30,
+			env={**os.environ, "SSH_AUTH_SOCK": R1_SOCK})
+	if r.returncode == 255:
+		raise RuntimeError("the tablet isn't answering")
+	return r.stdout
+
+
+def notebook_page(name):
+	"""The latest page of the tablet's notebook "To NAME": (its path under XOCHITL, its .rm bytes); ValueError when
+	there is none."""
+	if not re.fullmatch(r"[\w .-]{1,40}", name):
+		raise ValueError("no notebook for that name")
+	head, _, data = tablet("sh", f"NAME={shlex.quote(name)}\n{PAGE_FIND}".encode()).partition(b"\n")
+	if head in (b"", b"missing"):
+		raise ValueError(f"no notebook \u201cTo {name}\u201d on the tablet")
+	if head == b"none" or not data:
+		raise ValueError(f"nothing written in \u201cTo {name}\u201d yet (close the notebook so it saves)")
+	return head.decode(), data
+
+
+def read_page(pane):
+	"""What the owner wrote on the latest page of the notebook for the desk in pane."""
+	a = next((a for a in agent_list() if a.get("pane_id") == pane), None)
+	if not a:
+		raise ValueError("no such desk")
+	path, data = notebook_page(a.get("name") or a.get("agent", "?"))
+	png = render_page(data)
+	if not png:
+		raise ValueError("nothing new written since the last answer on its latest page")
+	text = read_letter(base64.b64encode(png).decode())
+	pages[pane] = path
+	return text
+
+
+def respond(doc, page="", live=False, supersedes="", stream_supported=False):
+	"""respond_once, with its outcome traced under the request id it would have had."""
+	marker = "notebook-" + uuid.uuid4().hex
+	trace.event('press', request=marker, doc=doc, page=page or None, live=live, supersedes=supersedes or None)
+	try:
+		result = respond_once(marker, doc, page, live, supersedes, stream_supported)
+	except Exception as e:
+		trace.event('refused', 'failed', request=marker, reason=f'{type(e).__name__}: {e}')
+		raise
+	return result
+
+
+def respond_once(marker, doc, page="", live=False, supersedes="", stream_supported=False):
+	"""The notebook's Respond button: what the owner wrote on page (else the notebook's latest) of notebook doc, a
+	"To NAME", read and sent to that desk; its answer then comes onto the page. -> {"to", "text", "page"}"""
+	if not isinstance(supersedes, str) or supersedes and not re.fullmatch(r'notebook-[0-9a-f]{32}', supersedes):
+		raise ValueError('Exact previous notebook request required')
+	# Include metadata/agent lookup and capture, not only the OCR/model work.
+	# Keep this attempt local until it has a new request identity: status polls
+	# for the previous exchange must never acquire the next exchange's timings.
+	stages = {"respond": time.monotonic()}
+	if not re.fullmatch(r"[0-9a-f-]{36}", doc):
+		raise ValueError(f"not a notebook: {doc[:40]!r}")
+	if not re.fullmatch(r"[0-9a-f-]{36}", page):
+		page = ""
+	m = re.search(rb'"visibleName": "[Tt]o ([^"]+)"', tablet(f"cat {XOCHITL}/{doc}.metadata"))
+	name = m.group(1).decode() if m else ""
+	stages["metadata_ready"] = time.monotonic()
+	a = next((a for a in agent_list() if (a.get("name") or a.get("agent", "")).lower() == name.lower()), None)
+	if not a:
+		raise ValueError(f"no desk called {name}" if name else "this notebook isn't a \u201cTo NAME\u201d")
+	stages["dispatch_resolved"] = time.monotonic()
+	if not page:
+		page = os.path.basename(tablet(f"ls -t {XOCHITL}/{doc}/*.rm | head -n 1").decode().strip())[:-3]
+	path = f"{doc}/{page}.rm"
+	trace.event('page_read', request=marker, path=path, desk=name)
+	global notebook_replay
+	fixture = None
+	with pending_lock:
+		candidate = notebook_replay
+		if candidate and candidate.get('path') == path and candidate.get('fixture'):
+			# An expired/changed fixture must never turn into a real model call.
+			notebook_replay = None
+			if not live or candidate['expires'] <= time.time():
+				raise ValueError('Renderer fixture expired or requires the live native path')
+			fixture = candidate
+			check_renderer_fixture(fixture)
+		replay = notebook_replay and notebook_replay.get("path") == path and notebook_replay["expires"] > time.time()
+		if replay:
+			notebook_replay = None
+		if fixture:
+			replay = True
+	route = notebook_model_route(doc, name, live) if not fixture else None
+	# A full agent session can act on handwritten requests (including sends).
+	# Until an exact recipient/payload has on-page confirmation, never fall
+	# back to that session. Isolated model calls have no tools; fixtures are local.
+	if not fixture and not route:
+		raise ValueError('Notebook requires an isolated model route; agent-session forwarding is disabled until on-page send confirmation is available')
+	if route and route.get('response_format') == 'story-stream-v1' and stream_supported is not True:
+		raise ValueError('Notebook answer streaming requires a streaming-capable native client')
+	if supersedes and (not route or replay):
+		raise ValueError('New-question replacement requires the live model route')
+	model_context = None
+	previous_model_job = None
+	replacing = False  # the page's pending request is replaced by this one once its capture succeeds
+	if route:
+		model_context = device_context.snapshot()
+		if (model_context.get('doc') != doc or model_context.get('page') != page or
+			not model_page_current(model_context)):
+			raise ValueError('Notebook model requires the unchanged active page')
+		with pending_lock:
+			previous_model_job = pend('').get(path)
+			if previous_model_job and not model_request_replaceable(previous_model_job, supersedes):
+				check_replaceable(path, previous_model_job)
+				replacing, supersedes = True, ''
+			if not replacing and (previous_model_job or supersedes) and not model_request_replaceable(previous_model_job, supersedes):
+				raise ValueError('A notebook request is already pending on this page')
+	image_context = LATEST_IMAGE_CONTEXT
+	if live:
+		frame = live_capture(tablet)
+		baseline_path = live_baseline(path)
+		baseline = None
+		if os.path.isfile(baseline_path) and not replay:
+			from PIL import Image
+			with Image.open(baseline_path) as saved:
+				baseline = saved.convert("L")
+		note_frames[path] = (frame, baseline)  # a note texted from this page is cut from this capture
+		for old in list(note_frames)[:-8]:
+			del note_frames[old]
+		if route:
+			crop, image_context = notebook_visual_input(frame, baseline)
+		else:
+			crop = notebook_crop(frame, baseline)
+		png = live_png(crop) if crop is not None else None
+	else:
+		png = render_page(tablet(f"cat {XOCHITL}/{path}"), new_only=not replay)
+	if not png:
+		trace.event('new_ink', 'none', request=marker, path=path, replay=bool(replay),
+			baseline=time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(os.path.getmtime(live_baseline(path)))) if live and os.path.isfile(live_baseline(path)) else 'none',
+			frame=trace_image(marker, 'frame', frame) if live else None, compared_with=live_baseline(path) if live else None)
+		raise ValueError("nothing new written since the last answer")
+	trace.event('new_ink', request=marker, path=path, png_bytes=len(png), route=bool(route), replay=bool(replay))
+	stages["reader_image_ready"] = time.monotonic()
+	# The staged lesson rollout uses the answering agent's vision directly.
+	# Do not make the page wait for a second provider or replace its math with
+	# a cheap transcription. Non-lesson/legacy requests retain their reader.
+	image_primary = bool(fixture) or live and lesson_enabled(doc)
+	if image_primary:
+		text = ""  # explicitly no transcription, not an assertion of no writing
+	else:
+		text = read_letter(base64.b64encode(png).decode())
+		stages["transcribed"] = time.monotonic()
+	os.makedirs(f"{CACHE}/pages", exist_ok=True)
+	seen = f"{CACHE}/pages/{doc[:8]}-{time.strftime('%Y%m%d-%H%M%S')}.png"   # the page as written, for the desk to look at
+	with open(seen, "wb") as stream:
+		stream.write(png)
+	sent = int(time.time())
+	job = [a["pane_id"], path, sent, True, marker, None, live]
+	with pending_lock:
+		if route and path in media_tests and media_tests[path]['expires'] > time.time():
+			raise ValueError('Prepared attachment tests require the existing media route')
+		media_test = media_tests.pop(path, None) if not fixture else None
+		if media_test and media_test["expires"] > time.time():
+			job.append([media_test["asset"]])
+	with pending_lock, native_ink_runs.lock:
+		reply_timings[path] = stages
+		trace.bind(path, marker)
+		if fixture:
+			check_renderer_fixture(fixture)
+			job = start_notebook_job(with_delivery(job, renderer_fixture=True, response_format='semantic-v1'))
+			notebook_names[marker] = 'Renderer Test'
+			notebook_reply(marker, fixture['response'])
+			stages['fixture_ready'] = time.monotonic()
+			return {'to':'Renderer Test', 'text':'Renderer fixture; no agent call.',
+				'page':path, 'live':True, 'request':marker, 'renderer_fixture':fixture['fixture']}
+		if route:
+			if (not model_page_current(model_context) or pend('').get(path) != previous_model_job or
+				not replacing and (previous_model_job or supersedes) and not model_request_replaceable(previous_model_job, supersedes)):
+				raise ValueError('Notebook page or pending request changed during capture')
+			if replacing:
+				check_replaceable(path, previous_model_job)
+				clear_pending(path, previous_model_job,
+					f'Replaced by a newer Respond on this page ({marker}); it was {answers.get(path)}')
+			if len(job)>7 and job[7]:
+				raise ValueError('Prepared attachment tests require the existing media route')
+			job = start_notebook_job(with_delivery(job, response_format='semantic-v1', model_transport='pi-socket-v1'))
+			notebook_names[marker] = name
+			stages['submitted'] = time.monotonic()
+			trace.event('submitted', request=marker, path=path, socket=os.path.basename(route.get('socket') or ''),
+				format=route.get('response_format'), supersedes=supersedes or None)
+			try:
+				prestart = take_prestart(path) if live and route.get('response_format') not in (
+					'story-panel-v1', 'story-stream-v1', 'role-production-v1') else None
+				threading.Thread(target=notebook_model_answer, args=(job, route, png, model_context, image_context, prestart),
+					daemon=True).start()
+			except Exception:
+				answers[path] = 'failed'
+				reply_errors[path] = 'Notebook model worker unavailable; no automatic resend'
+				raise ValueError('Notebook model worker unavailable') from None
+			return {'to':name, 'text':'', 'page':path, 'live':True, 'request':marker}
+
+
+def lesson_draft_tool(request):
+	"""Advertise this deployment's offline compiler, not a different worktree.
+
+	No scratch folder or new job/lease is created here. The answering agent
+	controls its own draft files; only its final transcript reply is collected.
+	"""
+	if not isinstance(request, str) or not re.fullmatch(r'notebook-[0-9a-f]{32}', request):
+		raise ValueError('exact notebook request required for author preview')
+	if not lesson_rollout_config()['draft_check']:
+		return None
+	tool = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'notebook_lesson_eval.py')
+	if not os.path.isfile(tool):
+		return None  # older deployments must not advertise an unavailable command
+	return {'command': shlex.join([sys.executable, tool, 'check']),
+		'directory': os.path.expanduser('~/.buzz/OUTBOX/notebook-drafts/'+request)}
+
+
+# The answer, in a hand, under the letter on its page: once the desk has finished its turn after the letter went.
+# The tablet saves an open notebook over the file, so a reply it wrote over is written again (for a while).
+ANSWER_WAIT, KEEP = 2700, 1200   # seconds: how long a desk may take to answer; how long the answer is kept on the page
+pages = {}     # pane -> the page its last letter was read from, until the letter is sent
+answers = trace.Traced('state')   # page -> waiting | ready | written | failed | no answer: for the notebook's Respond button (/answer)
+ready = {}     # page -> the answer the button will have written (/write)
+notebook_jobs = {}  # request ID -> the pending job, including an optional durable reply
+notebook_names = {}  # bounded request -> validated dispatch display name; no send authority
+notebook_answer_streams = {}  # request -> bounded in-flight prose, never a durable replay queue
+reply_errors = trace.Traced('held', failed=True)
+reply_timings = {}
+ink_fallbacks = set()  # requests whose drawing was left out because the page's anchors can't be proven safe
+retry_requests = {}  # explicit pre-insertion repair authorization, never an automatic resend
+reply_reader = ReplyReader()
+notebook_replay = None  # one explicitly armed replay for controlled testing, expires in 30 seconds
+media_tests = {}  # page -> one bounded attachment test on its next request
+media_store = AssetStore(f"{CACHE}/assets")
+notebook_auth = None  # Fail closed until startup loads the private capability file.
+
+
+def check_renderer_fixture(fixture):
+	"""Reuse current telemetry, not another lease or audit store."""
+	context = device_context.snapshot()
+	if (not context.get('fresh') or not context.get('active') or
+		any(context.get(k) != v for k,v in fixture['context'].items()) or
+		not lesson_enabled(fixture['context']['doc'])):
+		raise ValueError('Renderer fixture page, view or handwriting changed')
+
+
+def arm_notebook_test(body):
+	"""Existing local-only test arm; optional named fixtures never invoke a model."""
+	global notebook_replay
+	if not isinstance(body, dict) or set(body) not in ({'doc','page'}, {'doc','page','fixture'}):
+		raise ValueError('Exact notebook test fields required')
+	doc, page = body['doc'], body['page']
+	for value in (doc, page):
+		if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+			raise ValueError('Test replay requires canonical notebook and page UUIDs')
+	armed = dict(path=doc+'/'+page+'.rm', expires=time.time()+30)
+	if 'fixture' in body:
+		from notebook_semantic_examples import examples
+		fixtures = examples()
+		name = body['fixture']
+		if not isinstance(name, str) or name not in fixtures:
+			raise ValueError('Unknown renderer fixture')
+		response = json.dumps(fixtures[name])
+		parse_semantic_reply(response)  # whole lesson before arming/device work
+		context = device_context.snapshot()
+		if context.get('doc') != doc or context.get('page') != page:
+			raise ValueError('Renderer fixture requires the active test page')
+		armed.update(fixture=name, response=response, context={k:context.get(k) for k in
+			('doc','page','surface','view','content_revision','ink_revision')})
+		check_renderer_fixture(armed)
+		metadata = json.loads(tablet(f'cat {XOCHITL}/{doc}.metadata'))
+		parent = metadata.get('parent')
+		if not isinstance(parent,str) or str(uuid.UUID(parent)) != parent:
+			raise ValueError('Renderer fixture folder unavailable')
+		folder = json.loads(tablet(f'cat {XOCHITL}/{parent}.metadata'))
+		if metadata.get('visibleName') != 'To pidog' or folder.get('visibleName') != 'Storyboard tests (Codex)':
+			raise ValueError('Renderer fixtures require the isolated test notebook')
+	with pending_lock:
+		if 'fixture' in armed:
+			check_renderer_fixture(armed)
+			if armed['path'] in pend('') or notebook_replay and notebook_replay['expires'] > time.time():
+				raise ValueError('A notebook request or test is already pending')
+		armed['expires'] = time.time()+30
+		notebook_replay = armed
+	return dict(armed=True, expires_in=30, **({'renderer_fixture':body['fixture']} if 'fixture' in body else {}))
+
+
+def answer(pane, path, sent, hold=False, marker=None, recovered=None, live=False, media=None, delivery=None):
+	"""hold (the notebook's button): don't write it; keep it "ready" for /write, which the button calls once it has
+	closed the notebook, so the tablet can't save over it."""
+	semantic = semantic_delivery([pane,path,sent,hold,marker,recovered,live,media,delivery])
+	current_job = notebook_jobs.get(marker)
+	if current_job:
+		semantic = semantic or semantic_delivery(current_job)
+	if semantic and (not hold or not live or not marker):
+		raise ValueError('semantic replies require a held live request')
+	if recovered is not None:
+		with pending_lock:
+			notebook_reply(marker, recovered)
+			# Recovery must not advertise a possibly partial native insertion as
+			# ready. Retain the old answer and attempt; never replay or confirm it.
+			if (current_job and delivery_options(current_job).get('model_transport') == 'pi-socket-v1' and
+				matching_native_attempt(current_job)):
+				native_text_failed(path, marker)
+		return
+	if path in ready:
+		return
+	if (delivery_options([pane,path,sent,hold,marker,recovered,live,media,delivery]).get('model_transport') or
+		current_job and delivery_options(current_job).get('model_transport')):
+		# A restart cannot resume an in-process model stream. Preserve this job
+		# without redispatching it or reading an unrelated shared chat transcript.
+		with pending_lock:
+			current = pend('').get(path)
+			if current and current[4] == marker:
+				trace.bind(path, marker)
+				answers[path] = 'failed'
+				reply_errors[path] = 'Notebook model connection interrupted; no automatic resend'
+		return
+	answers[path] = "waiting"
+	end = time.time() + ANSWER_WAIT
+	while time.time() < end:
+		time.sleep(.25 if marker else 1)
+		if marker:
+			current = pend("").get(path)
+			if not current or (len(current) > 4 and current[4] != marker):
+				return
+		if path in ready:
+			return
+		try:
+			if marker:
+				matched_reply = reply_reader.answer(marker, sent)
+				if matched_reply:
+					# The structured reader has already checked final-message status
+					# and exact request identity. Unrelated terminal busy status must
+					# not delay delivery or require a legacy Claude-only thread scan.
+					if hold:
+						notebook_reply(marker, matched_reply)
+					else:
+						write_answer(path, matched_reply)
+					return
+				continue
+			th = thread(pane)
+		except Exception as e:
+			reply_errors[path] = "Reply reader unavailable: " + type(e).__name__
+			continue
+		said = [i for i in th["items"] if i["who"] == "agent" and i["at"] >= sent - 2]
+		if said and th["status"] != "working":
+			said[-1] = dict(said[-1], text=said[-1]["text"] + ("\n```svg\n" + said[-1]["svg"] + "\n```" if said[-1].get("svg") else ""))
+			if hold:
+				ready[path] = said[-1]["text"]; answers[path] = "ready"
+				return
+			try:
+				write_answer(path, said[-1]["text"])
+			except Exception as e:
+				answers[path] = "failed"
+				print(time.strftime("%T"), "answer", path, type(e).__name__, str(e)[:120], file=sys.stderr)
+			return
+	answers[path] = "no answer"
+	reply_errors[path] = "No completed reply reached this notebook; the agent's return connection needs checking"
+
+
+PENDING = os.path.expanduser("~/.cache/herd-board-pending.json")   # answers awaited, so a restart keeps waiting
+pending_lock = threading.RLock()
+
+
+def pend(path, job=None):
+	with pending_lock:
+		return pending_update(path, job)
+
+
+def pending_update(path, job=None):
+	try:
+		with open(PENDING) as stream:
+			p = json.load(stream)
+	except Exception:
+		p = {}
+	if path == "" and job is None:
+		return p
+	if job:
+		p[path] = job
+	else:
+		p.pop(path, None)
+	os.makedirs(os.path.dirname(PENDING), exist_ok=True)
+	with open(PENDING + ".new", "w") as stream:
+		json.dump(p, stream)
+	os.replace(PENDING + ".new", PENDING)
+	return p
+
+
+def resume():
+	for job in pend("").values():
+		if time.time() - job[2] < ANSWER_WAIT:
+			if len(job) == 4:
+				# Older sends already carry a unique image basename in the prompt.
+				# Recover that correlation rather than asking James to resend.
+				candidates = []
+				for image in glob.glob(f"{CACHE}/pages/{job[1][:8]}-*.png"):
+					modified = os.path.getmtime(image)
+					if job[2] - 60 <= modified <= job[2] + 2:
+						candidates.append((modified, image))
+				if len(candidates) == 1:
+					job = job + [os.path.basename(candidates[0][1])]
+					pend(job[1], job)
+			if len(job) > 4:
+				notebook_jobs[job[4]] = job
+			threading.Thread(target=answer, args=tuple(job), daemon=True).start()
+
+
+def notebook_reply(request, text):
+	"""Hold an answer for a specific pending notebook job; never write an open page."""
+	with pending_lock:
+		job = notebook_jobs.get(request)
+		if not job or time.time() - job[2] >= ANSWER_WAIT:
+			raise ValueError("unknown or expired notebook request")
+		if not isinstance(text, str) or not text.strip():
+			raise ValueError("reply must be 1 to 16000 characters of text")
+		semantic = semantic_delivery(job)
+		if semantic:
+			from notebook_semantic import MAX_BYTES
+			if len(text.encode('utf-8')) > MAX_BYTES:
+				raise ValueError('semantic response exceeds its byte budget')
+		elif has_lesson(text):
+			from notebook_lesson import MAX_RESPONSE
+			if len(text.encode('utf-8')) > MAX_RESPONSE:
+				raise ValueError('lesson response exceeds its byte budget')
+		elif len(text) > 16000:
+			raise ValueError("reply must be 1 to 16000 characters of text")
+		path = job[1]
+		current = pend("").get(path)
+		if current and len(current) > 4 and current[4] != request:
+			raise ValueError("notebook request has been superseded by a newer send")
+		if answers.get(path) == "written":
+			return {"state": "written"}
+		if semantic and current != job:
+			raise ValueError('semantic request binding changed or is missing')
+		if delivery_options(job).get('model_transport'):
+			parse_semantic_reply(text)  # callbacks/recovery cannot bypass full validation
+		if revision_pending(job):
+			if text.strip() != job[5]:
+				raise ValueError('pending revision cannot be replaced by a reply callback')
+			# resume() must not publish a corrected answer before explicit retry.
+			ready.pop(path, None)
+			answers[path] = 'revision-held'
+			reply_errors[path] = 'Corrected lesson held; explicit retry still required'
+			return {'state': 'revision-held'}
+		if not semantic and text.strip() == "[[notebook-media-pending]]":
+			if path in ready:
+				return {"state": "ready"}  # A completed media callback won the race.
+			job = job[:5] + [text.strip()] + job[6:]
+			pend(path, job)
+			notebook_jobs[request] = job
+			answers[path] = "waiting"
+			reply_errors.pop(path, None)
+			return {"state": "waiting", "media_pending": True}
+		if path in ready:
+			if ready[path] != text.strip():
+				raise ValueError("a different answer is already held for this request")
+			return {"state": "ready"}
+		job = job[:5] + [text.strip()] + job[6:]
+		pend(path, job)
+		notebook_jobs[request] = job
+		ready[path] = text.strip()
+		answers[path] = "ready"
+		reply_timings.setdefault(path, {})["reply_ready"] = time.monotonic()
+		reply_errors.pop(path, None)
+		return {"state": "ready"}
+
+
+def revise_notebook_response(request, expected_sha256, text):
+	"""Replace one invalid, stopped lesson; never import, insert or arm retry.
+
+	Local-only repair of a pre-insertion validation failure, not
+	general editing of accepted replies. The old text digest is compare-and-swap
+	and all existing insertion state is retained. Validation is not quality review.
+	"""
+	from notebook_lesson import parse_lesson
+	with pending_lock, native_ink_runs.lock:
+		held = held_notebook_response(request)
+		job = notebook_jobs[request]
+		path = job[1]
+		if (time.time() - job[2] >= ANSWER_WAIT or pend("").get(path) != job or
+			len(job) < 7 or job[6] is not True or answers.get(path) != 'ready'):
+			raise ValueError('revision requires a current unexpired live held reply')
+		if not native_retry_safe(job) or path in lesson_imports or retry_requests.get(request):
+			raise ValueError('revision requires no pending import, retry or insertion')
+		native_ink_runs.require_unprepared(request)
+		old = held['text']
+		if (not isinstance(expected_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', expected_sha256) or
+			hashlib.sha256(old.encode('utf-8')).hexdigest() != expected_sha256):
+			raise ValueError('held reply changed; inspect the exact original before revising')
+		semantic = semantic_delivery(job)
+		if (not semantic and not has_lesson(old)) or not lesson_enabled(path.split('/')[0]):
+			raise ValueError('revision is limited to invalid enabled board lessons')
+		validate = parse_semantic_reply if semantic else parse_lesson
+		try:
+			validate(old)
+		except ValueError:
+			pass
+		else:
+			raise ValueError('valid held lesson cannot be replaced by this repair route')
+		validate(text)  # whole lesson/equation/budgets; no assets or device I/O
+		text = text.strip()
+		# Re-read durable attempt/journal state immediately before committing.
+		if not native_retry_safe(job):
+			raise ValueError('insertion may already have started; revision refused')
+		native_ink_runs.require_unprepared(request)
+		revised = with_delivery(job[:5] + [text] + job[6:], revision_pending=True)
+		pend(path, revised)  # persist first: an I/O failure leaves in-memory state intact
+		notebook_jobs[request] = revised
+		# The same pending job holds the correction, but no writer can see it
+		# through ready until retry. No extra journal/lease or second job store.
+		ready.pop(path, None)
+		answers[path] = 'revision-held'
+		reply_errors[path] = 'Corrected lesson held; explicit retry still required'
+		reply_timings.setdefault(path, {})['reply_revised'] = time.monotonic()
+		return dict(state='revision-held', request=request, page=path, revised=True, retry_armed=False,
+			sha256=hashlib.sha256(text.encode('utf-8')).hexdigest())
+
+
+def start_notebook_job(job, *, response_format=None):
+	"""Pin a service-selected protocol before dispatch; no live selector yet.
+
+	The future isolated transport may opt in with response_format. Neither the
+	model response nor a tablet request can select or change this format.
+	"""
+	with pending_lock:
+		if response_format is not None:
+			if len(job)>5 and job[5] is not None:
+				raise ValueError('response format must be selected before dispatch')
+			job = with_delivery(job,response_format=response_format)
+		delivery_options(job)
+		path, marker = job[1], job[4]
+		previous = notebook_jobs.get(marker)
+		if previous and semantic_delivery(previous) != semantic_delivery(job):
+			raise ValueError('response format cannot rebind an existing request')
+		if semantic_delivery(job):
+			if (len(job)<7 or job[3] is not True or job[6] is not True or
+				not isinstance(marker,str) or not re.fullmatch(r'notebook-[0-9a-f]{32}',marker) or
+				not lesson_enabled(path.split('/')[0])):
+				raise ValueError('semantic replies require an enabled held live request')
+			if job[5] is not None or revision_pending(job):
+				raise ValueError('semantic format must be pinned on a new unanswered request')
+			if marker in notebook_jobs:
+				raise ValueError('response format cannot rebind an existing request')
+		pend(path, job)
+		ready.pop(path, None)
+		reply_errors.pop(path, None)
+		notebook_jobs[marker] = job
+		answers[path] = "waiting"
+		return job
+
+
+def write_ready(path):
+	"""The notebook's button, its notebook closed: the answer held for path, onto the page, once."""
+	if path not in ready:
+		raise ValueError("no answer waiting for that page")
+	job = pend('').get(path)
+	current = notebook_jobs.get(answer_status(path)['request'])
+	if (job and semantic_delivery(job)) or (current and semantic_delivery(current)):
+		raise ValueError('semantic replies require the native writer; no legacy file write')
+	reply_timings.setdefault(path, {})["write_started"] = time.monotonic()
+	where = write_answer(path, ready[path], keep=0) or path
+	reply_timings[path]["written"] = time.monotonic()
+	print(time.strftime("%T"), "notebook timing", json.dumps(timing_status(path)), file=sys.stderr, flush=True)
+	del ready[path]
+	pend(path)
+	return {"state": answers[where], "page": where, "idx": page_index(where)}
+
+
+def live_baseline(path):
+	if not re.fullmatch(r"[0-9a-f-]{36}/[0-9a-f-]{36}\.rm", path):
+		raise ValueError("not a notebook page")
+	return f"{CACHE}/pages/live-{path.replace('/', '-').removesuffix('.rm')}.png"
+
+
+def native_image_resources(path):
+	live_baseline(path)  # validates the exact notebook/page target
+	directory = f"{XOCHITL}/{path.removesuffix('.rm')}"
+	listing = tablet(f"find {directory} -maxdepth 1 -type f 2>/dev/null || true").decode()
+	return [name for name in listing.splitlines()
+		if re.fullmatch(re.escape(directory) + r"/[0-9a-f-]{36}\.(?:jpg|png)", name)]
+
+
+def native_media_proof(path, request, assets=None):
+	"""Verify newly persisted image pixels AND their reference in the saved page."""
+	with pending_lock:
+		job = pend("").get(path)
+		if not job or len(job) < 8 or job[4] != request:
+			raise ValueError("no matching notebook image request")
+		wanted = job[7] if assets is None else assets
+		if not isinstance(wanted, list) or not wanted or len(wanted) > 6 or any(
+			not isinstance(asset, str) or asset not in job[7] for asset in wanted):
+			raise ValueError("image proof requires media from this exact request")
+		with open(live_baseline(path) + ".media-before.json") as stream:
+			before = json.load(stream)
+		if before["request"] != request:
+			raise ValueError("notebook image request has been superseded")
+		files = [name for name in native_image_resources(path) if name not in before["files"]]
+		if len(files) < len(wanted):
+			return {"state": "waiting", "reason": "image resource not saved yet"}
+		if len(files) > 12:
+			raise ValueError("too many image changes during this notebook request")
+		from PIL import Image, ImageChops, ImageStat
+		data = tablet(f"cat {XOCHITL}/{path}")
+		matched = []
+		for asset in wanted:
+			with Image.open(io.BytesIO(media_store.get(asset))) as source:
+				expected = source.convert("L")
+			found = None
+			for name in files:
+				if name in matched:
+					continue
+				# This firmware's minimal BusyBox head has no -c option.
+				# dd is available (also used by the bounded framebuffer reader).
+				pixels = tablet(f"dd if={name} bs=4096 count=2930 2>/dev/null")
+				if len(pixels) > 12_000_000:
+					continue
+				with Image.open(io.BytesIO(pixels)) as image:
+					if image.size != expected.size:
+						continue
+					image = image.convert("L")
+				if ImageStat.Stat(ImageChops.difference(expected, image)).mean[0] > 8:
+					continue
+				identity = os.path.basename(name).rsplit(".", 1)[0]
+				if not any(value in data for value in (identity.encode(), uuid.UUID(identity).bytes, uuid.UUID(identity).bytes_le)):
+					return {"state": "waiting", "reason": "image is visible but page save is pending"}
+				found = name
+				break
+			if not found:
+				return {"state": "waiting", "reason": "matching image resource not found"}
+			matched.append(found)
+		return {"state": "persisted", "images": len(matched)}
+
+
+def native_ack_context(path, settling=False):
+	"""Identity/input guard; viewport settling is checked using paper pixels."""
+	context = device_context.snapshot()
+	if not context.get('available'):
+		return None  # legacy client without native geometry telemetry
+	doc, page = path.removesuffix('.rm').split('/')
+	if (context.get('doc') != doc or context.get('page') != page or
+		(not settling and (not context.get('fresh') or not context.get('active')))):
+		raise ValueError('Return to the original active page before confirming the reply')
+	return (context['surface'], tuple(context['view']), context['ink_revision'])
+
+
+def native_text(path, request="", done=False, ink_supported=False, imported=None, import_supported=True,
+                preservation_supported=False, layout=None, reveal_supported=False, playback_supported=False,
+                pen_equations_supported=False, story_supported=False, hand_supported=False):
+	"""Prepare a held string for xochitl's native editor; acknowledge only visible insertion."""
+	with pending_lock:
+		job = pend("").get(path)
+		if not job or len(job) < 7 or job[6] is not True or path not in ready:
+			raise ValueError("no live answer waiting for that page")
+		current = notebook_jobs.get(job[4])
+		semantic = semantic_delivery(job) or bool(current and semantic_delivery(current))
+		parsed = None
+		if semantic:
+			if current != job or time.time()-job[2]>=ANSWER_WAIT or ready[path] != job[5]:
+				raise ValueError('semantic request binding changed or expired')
+			if not lesson_enabled(path.split('/')[0]):
+				raise ValueError('native semantic replies are not enabled for this notebook')
+			parsed = parse_semantic_reply(ready[path])
+		lesson = parsed['mode']=='lesson' if semantic else has_lesson(ready[path])
+		baseline = live_baseline(path)
+		attempt = baseline + ".native-attempt"
+		if done:
+			if request != job[4] or not os.path.isfile(attempt):
+				raise ValueError("native acknowledgement does not match the request")
+			with open(attempt) as stream:
+				if stream.read() != request:
+					raise ValueError("native acknowledgement has been superseded")
+			if len(job) > 7 and job[7] and native_media_proof(path, request)["state"] != "persisted":
+				raise ValueError("notebook image is not saved yet; answer remains held")
+			if (request not in ink_fallbacks and (lesson or (not semantic and '[[notebook-ink:' in ready[path])) and
+				native_ink_proof(request)["state"] != "persisted"):
+				raise ValueError("native drawing save is not confirmed; answer remains held")
+			from PIL import Image
+			with Image.open(baseline + ".before.png") as saved:
+				proof = json.loads(saved.info.get('native_context', '{}'))
+				before_context = proof.get('context')
+				if proof.get('request') != request or before_context is None:
+					raise ValueError('No pre-insertion viewport proof; answer remains held')
+				before = saved.convert("L")
+			# Native isLoading can briefly be true while the automatic scroll
+			# finishes. Freeze identity/input now, require fresh active geometry
+			# AFTER the stable-paper samples, not before their settling window.
+			context = native_ack_context(path, settling=True)
+			after = live_capture(tablet)
+			after = settled_frame(after, lambda: live_capture(tablet))
+			final_context = native_ack_context(path)
+			# Automatic native scrolling may finish during capture: the stable
+			# pixels above, not the initial affine view, define the final image.
+			# A different surface/new pen input must NEVER be swallowed as baseline.
+			identity = lambda value: (value[0], value[2]) if value is not None else None
+			if identity(final_context) != identity(context) or identity(context) != identity(before_context):
+				raise ValueError('Page or handwriting changed while confirming the reply; input baseline not saved')
+			if aligned_writing_box(after, before, before_context[1], final_context[1]) is None:
+				# A long reply scrolls the view past the paper seen before it; then its ink is on newly exposed paper.
+				exposed, rows = exposed_writing_box(after, before_context[1], final_context[1])
+				evidence = dict(request=request, path=path, before=baseline + ".before.png",
+					after=trace_image(request, 'after', after), view_before=before_context[1],
+					view_after=final_context[1], observed_rows=rows)
+				if exposed is None:
+					trace.event('acknowledged', 'not visible', **evidence)
+					raise ValueError('native text was not visible on previously observed paper; answer remains held')
+				trace.event('acknowledged', 'scrolled', exposed_box=list(exposed), **evidence)
+			after.save(baseline)
+			reply_timings.setdefault(path, {})["written"] = time.monotonic()
+			answers[path] = "written"
+			reply_errors.pop(path, None)
+			del ready[path]
+			pend(path)
+			print(time.strftime("%T"), "native text visible", path, "timing", json.dumps(timing_status(path)), file=sys.stderr, flush=True)
+			trace.event('acknowledged', request=request, path=path, timing=timing_status(path))
+			return {"state": "written", "page": path}
+		if os.path.isfile(attempt):
+			with open(attempt) as stream:
+				if stream.read() == job[4]:
+					raise ValueError("Native text already attempted; inspect the page before retrying")
+		anchor_error = None  # set when the page's text anchors can't be proven safe for a drawing
+		if layout is not None:
+			if (not preservation_supported or not isinstance(layout, dict) or
+				layout.get('command', {}).get('request') != job[4] or layout.get('command', {}).get('phase') != 'before'):
+				raise ValueError('native before-layout measurement belongs to another reply')
+			mark_reply_timing(path, 'native_before_layout_received')
+			try:
+				native_ink_runs.finish_capture(layout, device_context.snapshot, native_saved_page)
+			except ValueError as e:
+				if 'native text anchor' not in str(e):
+					raise
+				anchor_error = e
+			mark_reply_timing(path, 'native_before_layout_measured')
+		# Monotonic request-relative stages separate polling, rendering, transfer,
+		# framebuffer capture and identity lookup. Never log text or capabilities.
+		stages = reply_timings.setdefault(path, {})
+		mark_reply_timing(path, 'native_requested')
+		from notebook_media import notebook_content, notebook_paragraph_styles, notebook_blocks
+		catalog = None
+		lesson_context = None
+		if not semantic and '[[notebook-ink:' in ready[path]:
+			if not ink_supported:
+				raise ValueError("this tablet client does not support native drawing stages")
+			catalog = load_catalog(INK_CATALOG)
+		if lesson:
+			if not ink_supported or not import_supported or not lesson_enabled(path.split('/')[0]):
+				raise ValueError('native lessons are not enabled for this notebook/client')
+			if parsed and 'story' in parsed and story_supported is not True:
+				raise ValueError('native story client capability required')
+			playback_supported = playback_supported is True and lesson_rollout_config().get('stroke_playback',False)
+			pen_equations_supported = pen_equations_supported is True and playback_supported
+			hand = lesson_rollout_config().get('reply_hand') if hand_supported is True and playback_supported else None
+			reader = lesson_rollout_config().get('reader')
+			opening = f"{reader}, {lesson_rollout_config().get('opening', 'once upon a time...')}" if reader else None
+			if imported is None:
+				previous = lesson_imports.get(path)
+				if previous and previous['request'] == job[4]:
+					raise ValueError('Lesson import already requested; reply remains held')
+				if semantic:
+					bundle = prepare_semantic_reply(ready[path], media_store,
+						reveal=reveal_supported and not playback_supported, playback=playback_supported,
+						pen_equations=pen_equations_supported, hand=hand, opening=opening,
+						picture=picture_frames if lesson_rollout_config().get('picture') == 'image' else None)
+					report = bundle.get('picture') or {}
+					if report.get('used') or report.get('reason', 'no picture') != 'no picture':
+						trace.event('picture', 'drawn' if report['used'] else 'procedural', request=job[4], path=path,
+							stages=report.get('stages'), reason=report.get('reason'))
+				else:
+					bundle = prepare_native_lesson(ready[path], media_store)
+				prepared = prepare_notebook_lesson_import(path, bundle)
+				prepared.update(request=job[4], response=ready[path], bundle=bundle)
+				lesson_imports[path] = prepared
+				return {'request':job[4], 'import_source':prepared['command']}
+			prepared = lesson_imports.get(path)
+			if (not isinstance(imported, dict) or not prepared or
+				imported.get('request') != job[4] or prepared['request'] != job[4] or
+				prepared['response'] != ready[path]):
+				raise ValueError('Lesson import callback is stale or superseded')
+			if any('reveal' in b for b in prepared['bundle']['blocks']) and reveal_supported is not True:
+				raise ValueError('Native reveal client capability changed during import')
+			if any('playback' in b for b in prepared['bundle']['blocks']) and playback_supported is not True:
+				raise ValueError('Native playback client capability changed during import')
+			if any(b.get('role') == 'equation' for b in prepared['bundle']['blocks']) and pen_equations_supported is not True:
+				raise ValueError('Native pen-equation client capability changed during import')
+			if any(b.get('role') == 'hand' for b in prepared['bundle']['blocks']) and hand is None:
+				raise ValueError('Native handwriting client capability changed during import')
+			lesson_context = prepared['context']
+			if native_ack_context(path) != lesson_context or device_context.snapshot().get('content_revision') != prepared['content_revision']:
+				raise ValueError('Page or input changed during lesson import')
+			bundle = remap_imported_lesson(prepared['bundle'], imported.get('doc'),
+				prepared['command']['parent'], path.split('/')[0], tablet,
+				validate_source=validate_native_ink_source)
+			blocks = bundle['blocks']
+			plain = '\n'.join(block['text'] for block in blocks if block['kind'] == 'text')
+			equation_assets = [block['asset'] for block in blocks if block['kind'] == 'media']
+		elif semantic:
+			if imported is not None:
+				raise ValueError('text-only semantic reply has no source import')
+			plain = parsed['text']
+			blocks = [dict(kind='text',text=plain,styles=[])]
+			equation_assets = []
+		else:
+			blocks = notebook_blocks(ready[path], media_store, catalog)
+			plain, equation_assets = notebook_content(ready[path], media_store, catalog)
+		for block in blocks:
+			if block['kind'] == 'ink' and not lesson:
+				native_ink_source(block)  # verify EVERY source before the first text insertion
+		stages["native_content_ready"] = time.monotonic()
+		if equation_assets:
+			attachments = list(job[7] or []) if len(job) > 7 else []
+			for asset in equation_assets:
+				if asset not in attachments:
+					attachments.append(asset)
+			job = job[:7] + [attachments] + job[8:]
+			pend(path, job)
+			notebook_jobs[job[4]] = job
+		media = []
+		if len(job) > 7 and job[7]:
+			with open(baseline + ".media-before.json", "w") as stream:
+				json.dump({"request": job[4], "files": native_image_resources(path)}, stream)
+		for asset in ((job[7] or []) if len(job) > 7 else []):
+			data = media_store.get(asset)
+			remote = f"/home/root/.cache/herd-board/assets/{asset}.png"
+			tablet(f"mkdir -p /home/root/.cache/herd-board/assets && cat > {remote}.new && mv {remote}.new {remote}", data)
+			from PIL import Image
+			with Image.open(io.BytesIO(data)) as image:
+				media.append({"asset": asset, "url": "file://" + remote, "width": image.width, "height": image.height})
+		# Old tablet patches ignore blocks and retain the legacy prose/media fields.
+		# New patches consume this complete, validated sequence, with no local paths
+		# or unregistered asset identifiers supplied by the agent.
+		by_asset = {item["asset"]: item for item in media}
+		for block in blocks:
+			if block["kind"] == "media":
+				block.update(by_asset[block["asset"]])
+		# Attachments supplied out-of-band have no marker in the agent text. Keep
+		# those at the end, rather than silently dropping pre-armed test media.
+		placed = {block["asset"] for block in blocks if block["kind"] == "media"}
+		blocks.extend(dict(kind="media", **item) for item in media if item["asset"] not in placed)
+		stages["native_media_ready"] = time.monotonic()
+		frame_context = native_ack_context(path)
+		if lesson_context is not None and (frame_context != lesson_context or
+			device_context.snapshot().get('content_revision') != prepared['content_revision']):
+			raise ValueError('Page, viewport or handwriting changed after lesson preparation')
+		frame = live_capture(tablet)
+		if native_ack_context(path) != frame_context:
+			raise ValueError('Page or viewport changed during the pre-insertion capture; answer remains held')
+		box = writing_box(frame)
+		stages["native_frame_ready"] = time.monotonic()
+		# Reduce only the preferred placement margin, not the actual-ink guard
+		# or native preliminary-gap algorithm. Existing page content is untouched.
+		top = box[3] + NATIVE_REPLY_CLEARANCE if box else 165
+		# Native text can extend the continuous notebook page beyond the viewport.
+		name = 'Renderer Test' if delivery_options(job).get('renderer_fixture') else notebook_names.get(job[4])
+		if not name:
+			name = next((a.get("name") or a.get("agent", "") for a in agent_list()
+				if a.get("pane_id") == job[0]), "Unknown")
+		if re.sub(r"[^a-z]", "", name.lower()) == "pidog":
+			name = "Pi Dog"
+		stages["native_identity_ready"] = time.monotonic()
+		from PIL.PngImagePlugin import PngInfo
+		metadata = PngInfo()
+		metadata.add_text('native_context', json.dumps({'request':job[4], 'context':frame_context}))
+		frame.save(baseline + ".before.png", pnginfo=metadata)
+		if any(block['kind'] == 'ink' for block in blocks):
+			# Snapshot pre-existing line IDs before any insertion so an older
+			# identical diagram cannot satisfy this request's saved-ink proof.
+			before = tablet(f'if test -f {XOCHITL}/{path}; then dd if={XOCHITL}/{path} bs=1024 count=16384 2>/dev/null; fi')
+			if not before:
+				raise ValueError('native page is not saved yet; drawing remains held before insertion')
+			if native_ack_context(path) != frame_context:
+				raise ValueError('Page, viewport or handwriting changed before drawing registration')
+			try:
+				if anchor_error:
+					raise anchor_error
+				unknown = sorted({b['scene'] for b in blocks if b['kind'] == 'ink' and not ink_scene_known(b)})
+				if unknown:
+					raise ValueError('drawing not in the catalog: ' + ', '.join(unknown))
+				registered = native_ink_runs.register(job[4], path, device_context.snapshot(), blocks, before,
+					preservation=preservation_supported, blank_prose=reply_label(name, blocks) == '' and
+					not any(b['text'] for b in blocks if b['kind'] == 'text'))
+			except ValueError as e:
+				if 'native text anchor' not in str(e) and 'not in the catalog' not in str(e):
+					raise
+				# The page's ink hangs off its typed text in a way the preservation proof can't follow, so a drawing
+				# here could move it. Place the reply's words below the last ink, as for any typed answer, rather
+				# than hold the whole reply; the drawing is left out, and the page says so.
+				blocks = [b for b in blocks if b['kind'] != 'ink']
+				plain = '\n'.join(b['text'] for b in blocks if b['kind'] == 'text' and b['text'])
+				plain = (plain + '\n' if plain else '') + ('(The drawing could not be placed on this page; ask again on a fresh page.)'
+					if 'anchor' in str(e) else '(The drawing was left out: it is not one this board can draw yet.)')
+				blocks = [dict(kind='text', text=plain, styles=[])] + [b for b in blocks if b['kind'] == 'media']
+				ink_fallbacks.add(job[4])
+				trace.event('placed', 'fallback', request=job[4], path=path, reason=str(e), kept='text only')
+				registered = {}
+			if 'measure_layout' in registered:
+				reason = registered.get('layout_reason', 'initial')
+				if reason in ('initial', 'snapshot_changed', 'context_changed'):
+					mark_reply_timing(path, 'native_before_layout_'+reason)
+				return dict(request=job[4], **registered)
+		with open(attempt, "w") as stream:
+			stream.write(job[4])
+		reply_timings.setdefault(path, {})["write_started"] = time.monotonic()
+		answers[path] = "writing"
+		lesson_imports.pop(path, None)
+		return {"request": job[4], "text": plain, "top": top,
+			"inkBottom": max(100, box[3] - 30) if box else 120,
+			"label": reply_label(name, blocks), "media": media,
+			"styles": [] if semantic else notebook_paragraph_styles(ready[path], plain), "blocks": blocks}
+
+
+def reply_label(name, blocks):
+	"""The reader's name opens a reply, as the Primer opened with Nell's; written by hand when the reply is."""
+	try:
+		reader = lesson_rollout_config().get('reader')
+	except (OSError, ValueError):
+		reader = None
+	if not reader:
+		return f"Agent {name}:"
+	return '' if any(b.get('role') == 'hand' for b in blocks) else f"{reader},"
+
+
+def native_text_failed(path, request):
+	"""Record a stopped native attempt without authorizing replay or losing its proof."""
+	with pending_lock:
+		job = notebook_jobs.get(request)
+		if not job or job[1] != path or len(job) < 7 or job[6] is not True:
+			raise ValueError('native failure does not match a live request')
+		# A delayed failure must not demote a confirmed save, or a newer request.
+		current = answer_status(path)
+		if current['request'] != request:
+			raise ValueError('native failure has been superseded')
+		if current['state'] == 'written':
+			return {'state': 'written', 'request': request}
+		attempt = live_baseline(path) + '.native-attempt'
+		try:
+			with open(attempt) as stream:
+				matching = stream.read(128) == request
+		except OSError:
+			matching = False
+		if not matching and current['state'] == 'ready' and native_retry_safe(job):
+			# A preparation failure can occur before the durable insertion claim.
+			# Keep the answer held, but consume any explicit repair hint so a
+			# dismissal/reopen cannot replay that hint. Never clear an attempt,
+			# import, source, or saved-content proof; only admin may re-arm.
+			retry_requests.pop(request, None)
+			reply_errors[path] = 'Tablet could not prepare this reply; answer held for inspection'
+			reply_timings.setdefault(path, {}).setdefault('native_prepare_failed', time.monotonic())
+			return {'state': 'ready', 'request': request, 'held': True}
+		# resume() restores held answers as ready after a server restart. The
+		# exact durable attempt still forbids replay and identifies this failure.
+		if not matching or current['state'] not in ('writing', 'failed', 'ready'):
+			raise ValueError('no matching native insertion attempt to stop')
+		answers[path] = 'failed'
+		reply_errors[path] = 'Tablet stopped while inserting this reply; inspect the page before retrying'
+		reply_timings.setdefault(path, {}).setdefault('native_failed', time.monotonic())
+		return {'state': 'failed', 'request': request}
+
+
+def write_live(path):
+	"""Place a held reply through the open notebook's native pen, with no disk edit."""
+	with pending_lock:
+		job = pend("").get(path)
+		if not job or len(job) < 7 or job[6] is not True:
+			raise ValueError("not a live notebook request")
+		if path not in ready:
+			raise ValueError("no answer waiting for that page")
+		frame = live_capture(tablet)
+		box = writing_box(frame)
+		top = (box[3] if box else 120) + 45
+		if top > 1400:
+			raise ValueError("Not enough visible space below the writing for this reply")
+		lines = compose(ready[path], top, bottom=1640)
+		paths = [[(702 + x, y) for x, y, width in line] for line in lines]
+		if not paths:
+			raise ValueError("the answer has no drawable content")
+		attempt = live_baseline(path) + ".attempt"
+		if os.path.isfile(attempt):
+			with open(attempt) as stream:
+				if stream.read() == job[4]:
+					raise ValueError("Native reply already attempted; check the page before retrying")
+		with open(attempt, "w") as stream:
+			stream.write(job[4])
+		reply_timings.setdefault(path, {})["write_started"] = time.monotonic()
+		answers[path] = "writing"
+		ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", TABLET]
+		try:
+			live_draw(paths, ssh, {**os.environ, "SSH_AUTH_SOCK": R1_SOCK})
+			# Save the actual pixels after native rendering to exclude this answer
+			# from the next handwritten request, without closing the document.
+			time.sleep(.15)
+			after = live_capture(tablet)
+			if writing_box(after, frame) is None:
+				raise RuntimeError("Native reply did not become visible; check the current pen tool")
+			after.save(live_baseline(path))
+		except Exception:
+			answers[path] = "failed"
+			raise
+		reply_timings[path]["written"] = time.monotonic()
+		answers[path] = "written"
+		del ready[path]
+		pend(path)
+		print(time.strftime("%T"), "native answer written", path, "timing", json.dumps(timing_status(path)), file=sys.stderr, flush=True)
+		return {"state": "written", "page": path, "live": True}
+
+
+def mark_reply_timing(path, stage):
+	"""Keep first/latest boundaries in the existing request-relative clock.
+
+	Only fixed internal stage names are passed here. Re-entering preflight used
+	to erase its initial start, hiding layout retries behind model latency.
+	No new journal, payload logging, retry, or acceptance behavior is added.
+	"""
+	stages = reply_timings.setdefault(path, {})
+	now = time.monotonic()
+	stages.setdefault(stage+'_first', now)
+	stages[stage] = now
+
+
+def timing_status(path):
+	times = reply_timings.get(path, {})
+	start = times.get("respond")
+	return {stage: round((at - start) * 1000) for stage, at in times.items()} if start is not None else {}
+
+
+def answer_status(path):
+	# Keep the request identity after pending removal so a failed tablet UI can
+	# reconcile a confirmed save without resending or inserting the answer twice.
+	request = next((job[4] for job in reversed(list(notebook_jobs.values()))
+		if job[1] == path), None)
+	job = notebook_jobs.get(request)
+	media_pending = bool(job and len(job) > 5 and job[5] == "[[notebook-media-pending]]")
+	if media_pending and answers.get(path) == "waiting" and time.time() - job[2] >= ANSWER_WAIT:
+		answers[path] = "no answer"
+		reply_errors[path] = "Image generation handoff timed out; the notebook input is preserved"
+	started = reply_timings.get(path, {}).get("respond")
+	return {"state": answers.get(path, "unknown"), "error": reply_errors.get(path),
+		"timing_ms": timing_status(path), "request": request,
+		"respond_elapsed_ms": max(0, round((time.monotonic() - started) * 1000)) if started is not None else None,
+		"media_pending": media_pending,
+		"retry_token": retry_requests.get(request) if answers.get(path) == "ready" and native_retry_safe(job) else None}
+
+
+def incomplete_native_attempt(path):
+	"""Read-only reopen hint from the EXISTING attempt; never a replay grant.
+
+	A backend restart may restore the held reply as ready. The matching durable
+	attempt still means insertion began but has no confirmed completion.
+	"""
+	job = next((j for j in reversed(list(notebook_jobs.values())) if j[1] == path), None)
+	if (not job or len(job) < 7 or job[6] is not True or path not in ready or
+		answers.get(path) not in ('ready','writing','failed')):
+		return None
+	try:
+		with open(live_baseline(path)+'.native-attempt') as stream:
+			if stream.read(128) == job[4]:
+				return {'request':job[4]}
+	except OSError:
+		pass
+	return None
+
+
+def native_context_report(body):
+	"""Geometry telemetry plus an explicitly admin-armed, pre-insertion repair hint."""
+	result = device_context.update(body)
+	if not result.get("accepted") or not body["active"]:
+		return result
+	result["keep_awake_seconds"] = device_context.awake_seconds(body["doc"])
+	# The client sends one telemetry request at a time. Do not block its ACK
+	# behind a slow source/media transfer: that would prevent later heartbeats
+	# and make the preparation's own page guard fail as stale. Busy preparation
+	# gets telemetry only, never a probe, audit move or repair command.
+	if not pending_lock.acquire(blocking=False):
+		return result
+	try:
+		if body.get('page'):
+			result['incomplete_reply'] = incomplete_native_attempt(body['doc']+'/'+body['page']+'.rm')
+		idle = answers.get(body['doc']+'/'+body['page']+'.rm', 'unknown') in ('unknown', 'written')
+		audit = view_audit.command(body, idle=idle)
+		if audit:
+			result['audit_view'] = audit
+		probe = native_probe.command(body)
+		if probe:
+			result["probe"] = probe
+		if not retry_requests:
+			return result
+		path = body["doc"] + "/" + body["page"] + ".rm"
+		job = next((job for job in reversed(list(notebook_jobs.values())) if job[1] == path), None)
+		if job and path in ready and answers.get(path) == "ready" and retry_requests.get(job[4]) and native_retry_safe(job):
+			result["repair"] = {"request": job[4], "token": retry_requests[job[4]]}
+	finally:
+		pending_lock.release()
+	return result
+
+
+def arm_view_audit(body):
+	"""Never grant general tablet control: one bounded move on our isolated page."""
+	if not isinstance(body, dict) or set(body) != {'doc', 'page', 'dy'}:
+		raise ValueError('audit move requires doc, page and dy only')
+	if (body['doc'], body['page']) != ('905df7ae-ff54-46b9-a71e-45bb02bef638',
+			'3ad12986-0467-48fe-986d-d1bd480c4777'):
+		raise ValueError('audit moves are restricted to the isolated Storyboard test page')
+	with pending_lock:
+		path = body['doc']+'/'+body['page']+'.rm'
+		if answers.get(path, 'unknown') not in ('unknown', 'written'):
+			raise ValueError('cannot move the audit view while a reply is pending')
+		context = device_context.snapshot()
+		if any(context.get(key) != body[key] for key in ('doc', 'page')):
+			raise ValueError('original audit page must be foreground')
+		return view_audit.arm(context, body['dy'])
+
+
+def native_blank_preflight(body):
+	"""Diagnostic ONLY: never permit paste onto an existing working notebook."""
+	for key in ("doc", "page", "source_doc", "source_page"):
+		value = body.get(key)
+		if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+			raise ValueError("native diagnostic requires canonical UUIDs")
+	context = device_context.snapshot()
+	if (not context.get("fresh") or not context.get("active") or context.get("ink_revision") != 0 or
+		any(context.get(key) != body.get(key) for key in ("doc", "page", "surface")) or
+		context.get("view") != [1, 0, 0, 1, -702, 0] or context["text_bounds"][3] != 0):
+		raise ValueError("native paste diagnostic requires a fresh pristine unscrolled page")
+	base = "/home/root/.local/share/remarkable/xochitl/"
+	destination = json.loads(tablet("cat " + base + body["doc"] + ".metadata"))
+	parent = destination.get("parent")
+	if not isinstance(parent, str) or str(uuid.UUID(parent)) != parent or destination.get("visibleName") != "To pidog":
+		raise ValueError("native paste requires its isolated diagnostic notebook")
+	folder = json.loads(tablet("cat " + base + parent + ".metadata"))
+	if folder.get("visibleName") != "Native clone tests (Codex)":
+		raise ValueError("native paste is disabled outside its isolated diagnostic folder")
+	source_meta = json.loads(tablet("cat " + base + body["source_doc"] + ".metadata"))
+	if source_meta.get("parent") != parent or source_meta.get("visibleName") != "Procedural stroke sources":
+		raise ValueError("native paste source must be generated ink in the same diagnostic folder")
+	source = tablet("dd if=" + base + body["source_doc"] + "/" + body["source_page"] + ".rm bs=1024 count=256 2>/dev/null")
+	if (not source.startswith(b"reMarkable .lines file, version=6") or len(source) >= 262144 or
+		43 + sum(len(raw) for _, raw in blocks(source)) != len(source) or
+		not {k for k, _ in blocks(source)} <= {0, 1, 2, 4, 5, 9, 10} or
+		len(strokes(source)) != body.get("expected_strokes")):
+		raise ValueError("native source asset failed its ink-only integrity/count preflight")
+	target = base + body["doc"] + "/" + body["page"] + ".rm"
+	saved = tablet("if test -f " + target + "; then dd if=" + target + " bs=1024 count=5 2>/dev/null; fi")
+	if saved and (len(saved) > 4096 or strokes(saved) or
+		any(kind not in {0, 1, 2, 4, 9, 10, 13, 14} for kind, raw in blocks(saved))):
+		raise ValueError("native paste diagnostic refuses saved notebook content")
+	frame = live_capture(tablet)
+	if frame.crop((130, 210, 1304, 1792)).point(lambda value: 255 if value < 110 else 0).getbbox():
+		raise ValueError("native paste diagnostic refuses visible notebook content")
+	return hashlib.sha256(source).hexdigest()
+
+
+def arm_native_probe(body):
+	digest = native_blank_preflight(body) if body.get("operation") == "paste-blank-test" else None
+	if body.get('operation') == 'text-anchor':
+		digest = native_anchor_source_hash(body)
+	if body.get('operation') == 'import-source':
+		from notebook_lesson_native import inspect_source_archive
+		for key in ('source_doc', 'source_parent', 'source_page'):
+			if not isinstance(body.get(key), str) or str(uuid.UUID(body[key])) != body[key]:
+				raise ValueError('canonical import source identity required')
+		doc, parent = body['source_doc'], body['source_parent']
+		if doc == body.get('doc'):
+			raise ValueError('import source must be a new disposable document')
+		if tablet(f'test ! -e {XOCHITL}/{doc}.metadata && test ! -e {XOCHITL}/{doc}.content && test ! -e {XOCHITL}/{doc} && printf fresh') != b'fresh':
+			raise ValueError('import source UUID already exists')
+		folder = json.loads(tablet(f'cat {XOCHITL}/{parent}.metadata'))
+		if folder.get('visibleName') != 'Storyboard tests (Codex)' or folder.get('type') != 'CollectionType':
+			raise ValueError('import probe requires the isolated source folder')
+		data = tablet(f'dd if=/home/root/.cache/herd-board/imports/{doc}.rmdoc bs=2000001 count=1 2>/dev/null')
+		digest = inspect_source_archive(data, doc, parent, body['source_page'], body.get('expected_strokes'))
+	return native_probe.arm(body, device_context.snapshot(), source_sha256=digest)
+
+
+def native_anchor_source_hash(body):
+	"""Read-only diagnostic on a different saved page of our isolated fixture."""
+	for key in ('source_doc', 'source_page'):
+		if not isinstance(body.get(key), str) or str(uuid.UUID(body[key])) != body[key]:
+			raise ValueError('canonical anchor source identity required')
+	doc, page = body['source_doc'], body['source_page']
+	if doc == body.get('doc') and page == body.get('page'):
+		raise ValueError('anchor probe cannot focus the foreground page')
+	metadata = json.loads(tablet(f'cat {XOCHITL}/{doc}.metadata'))
+	parent = metadata.get('parent')
+	if not isinstance(parent, str) or str(uuid.UUID(parent)) != parent:
+		raise ValueError('anchor source requires isolated parent')
+	folder = json.loads(tablet(f'cat {XOCHITL}/{parent}.metadata'))
+	if folder.get('visibleName') != 'Storyboard tests (Codex)' or folder.get('type') != 'CollectionType':
+		raise ValueError('anchor probe requires the isolated test folder')
+	raw = tablet(f'dd if={XOCHITL}/{doc}/{page}.rm bs=262144 count=1 2>/dev/null')
+	if not 43 <= len(raw) < 262144 or not raw.startswith(b'reMarkable .lines file, version=6'):
+		raise ValueError('bounded saved anchor source required')
+	return hashlib.sha256(raw).hexdigest()
+
+
+def complete_native_probe(body):
+	job = native_probe.current_job()
+	if job and job.get('operation') == 'text-anchor' and body.get('state') == 'text-anchor':
+		context = device_context.snapshot()
+		if (body.get('id') != job['id'] or not context.get('fresh') or not context.get('active') or
+			any(context.get(k) != job[k] for k in ('doc', 'page', 'surface')) or
+			context.get('content_revision') != job['revision'] or context.get('ink_revision') != job['ink']):
+			raise ValueError('foreground changed during anchor diagnostic')
+		if native_anchor_source_hash(job) != job['source_sha256']:
+			raise ValueError('anchor diagnostic source changed; result not accepted')
+	if job and job.get('operation') == 'import-source' and body.get('state') == 'cloned':
+		if body.get('id') != job['id']:
+			raise ValueError('import probe result is stale')
+		actual = body.get('imported_doc')
+		if not isinstance(actual, str) or str(uuid.UUID(actual)) != actual or actual == job['doc']:
+			raise ValueError('invalid imported source identity')
+		page = body.get('imported_page')
+		if not isinstance(page, str) or str(uuid.UUID(page)) != page:
+			raise ValueError('invalid imported page identity')
+		metadata = json.loads(tablet(f'cat {XOCHITL}/{actual}.metadata'))
+		if metadata.get('visibleName') != 'Agent lesson source '+job['source_doc'] or metadata.get('parent') != job['source_parent']:
+			raise ValueError('imported source identity or parent changed')
+		content = json.loads(tablet(f'cat {XOCHITL}/{actual}.content'))
+		if content['cPages']['pages'][0]['id'] != page:
+			raise ValueError('imported first page identity changed')
+		raw = tablet(f'dd if={XOCHITL}/{actual}/{page}.rm bs=262144 count=1 2>/dev/null')
+		if len(raw) >= 262144 or hashlib.sha256(raw).hexdigest() != job['source_sha256']:
+			raise ValueError('imported source bytes changed; no insertion authorized')
+	return native_probe.complete(body)
+
+
+def claim_native_probe(body):
+	job = native_probe.current_job()
+	if not job or body.get("id") != job["id"] or job["operation"] != "paste-blank-test":
+		raise ValueError("no matching native blank diagnostic")
+	if native_blank_preflight(job) != job["source_sha256"]:
+		raise ValueError("native stroke source changed after arming")
+	return native_probe.claim(body, device_context.snapshot())
+
+
+def native_ink_source(block):
+	for key in ('source_doc', 'source_page'):
+		if str(uuid.UUID(block[key])) != block[key]:
+			raise ValueError('invalid registered native source identity')
+	name = f"{XOCHITL}/{block['source_doc']}/{block['source_page']}.rm"
+	data = tablet('dd if='+name+' bs=1024 count=256 2>/dev/null')
+	return validate_native_ink_source(block, data)
+
+
+def validate_native_ink_source(block, data):
+	"""Same integrity checks for import reads and fresh per-stage claim reads."""
+	for key in ('source_doc', 'source_page'):
+		if str(uuid.UUID(block[key])) != block[key]:
+			raise ValueError('invalid registered native source identity')
+	if (len(data) >= 262144 or hashlib.sha256(data).hexdigest() != block['sha256'] or
+		len(strokes(data)) != block['stroke_count']):
+		raise ValueError('registered native source integrity or count changed')
+	if 'reveal' in block:
+		from notebook_ink_reveal import reveal_source_paths
+		reveal_source_paths(block, data)
+	if 'playback' in block:
+		from notebook_ink_playback import validate_playback
+		validate_playback(block, data)
+	return data
+
+
+def lesson_rollout_config():
+	"""Existing rollout file; old notebook lists leave author checking OFF."""
+	try:
+		with open(LESSON_CONFIG, 'rb') as stream:
+			raw = stream.read(16385)
+		if len(raw) > 16384:
+			raise ValueError('lesson rollout configuration too large')
+		config = json.loads(raw)
+	except FileNotFoundError:
+		config = []
+	if isinstance(config, list):
+		config = {'notebooks': config, 'draft_check': False}
+	if (not isinstance(config, dict) or
+		set(config)-{'notebooks','draft_check','model_transport','stroke_playback','label_hand','reply_hand','reader','opening',
+			'picture','story'} or
+		type(config.get('story',False)) is not bool or
+		config.get('picture','off') not in ('off','image') or
+		not {'notebooks','draft_check'} <= set(config) or
+		type(config['draft_check']) is not bool or type(config.get('stroke_playback',False)) is not bool or
+		config.get('label_hand','plotter') not in notebook_lesson.LABEL_HANDS or
+		config.get('reply_hand','primer') not in ('primer','reader','letter') or
+		not re.fullmatch(r"[A-Z][a-z]{0,23}", config.get('reader', 'James')) or
+		not re.fullmatch(r"[a-z][a-z ,.']{0,47}", config.get('opening', 'once upon a time...'))):
+		raise ValueError('lesson rollout requires notebooks and an explicit draft_check boolean')
+	validate_lesson_notebooks(config['notebooks'])
+	notebook_lesson.label_hand = config.get('label_hand','plotter')
+	if 'model_transport' in config:
+		route = config['model_transport']
+		if isinstance(route,dict) and route.get('response_format') == 'role-production-v1':
+			from notebook_role_transport import validate_roles
+			if (set(route) != {'agent','roles','deadline_ms','response_format'} or route['agent'] != 'pidog' or
+				type(route['deadline_ms']) is not int or not 1 <= route['deadline_ms'] <= 30000):
+				raise ValueError('invalid operator notebook role transport')
+			route['roles'] = validate_roles(route['roles'])
+			return config
+		if (not isinstance(route,dict) or set(route)-{'agent','socket','deadline_ms','response_format'} or
+			not {'agent','socket','deadline_ms'} <= set(route) or
+			route['agent'] != 'pidog' or not isinstance(route['socket'],str) or
+			not os.path.isabs(route['socket']) or os.path.normpath(route['socket']) != route['socket'] or
+			len(route['socket'].encode('utf-8')) > 100 or
+			type(route['deadline_ms']) is not int or not 1 <= route['deadline_ms'] <= 90000):
+			raise ValueError('invalid operator notebook model transport')
+		if (route.get('response_format','semantic-v1') not in ('semantic-v1','story-panel-v1','story-stream-v1') or
+			route.get('response_format') in ('story-panel-v1','story-stream-v1') and os.path.basename(route['socket']) == 'notebook-eval.sock'):
+			raise ValueError('invalid operator notebook model response format')
+	return config
+
+
+def notebook_model_route(doc, name, live):
+	"""Operator-owned rollout only; tablet/model input cannot choose an endpoint."""
+	if not live or not lesson_enabled(doc):
+		return None
+	route = lesson_rollout_config().get('model_transport')
+	return dict(route) if route and name.lower() == route['agent'] else None
+
+
+# The tablet reports its page twice a second, but a busy moment on the tablet can delay
+# one report past the 1.5 s freshness window (IRIS reply, 2026-10-30 15:18). A model call
+# waits out a short gap; a changed page still stops it at once.
+MODEL_PAGE_GRACE_MS = 6000
+
+
+def model_page_stop_reason(before):
+	"""Reuse native telemetry; no new lease, audit or tablet polling loop."""
+	current = device_context.snapshot()
+	late = current.get('available') and current.get('age_ms', MODEL_PAGE_GRACE_MS + 1) <= MODEL_PAGE_GRACE_MS
+	if not current.get('active') or not (current.get('fresh') or late):
+		return 'page_unavailable'
+	if not all(before.get(k) is not None and before.get(k) == current.get(k) for k in
+			('doc','page','surface','view','content_revision','ink_revision')):
+		return 'page_changed'
+	return None
+
+
+def model_page_current(before):
+	return model_page_stop_reason(before) is None
+
+
+def notebook_answer_stream(body):
+	"""Read complete answer records for one unchanged job; this is NOT an insertion ACK.
+
+	Reads are repeatable so a lost HTTP response cannot lose text. The native
+	consumer must own its consumed sequence and append range, never replay a
+	consumed record. Until that consumer is installed no client advertises the
+	capability required by respond(). No geometry or raw provider deltas escape.
+	"""
+	if (not isinstance(body, dict) or set(body) != {'request','page','after'} or
+		not isinstance(body['request'], str) or not isinstance(body['page'], str) or
+		type(body['after']) is not int or not -1 <= body['after'] <= 2):
+		raise ValueError('Exact answer stream request, page and sequence required')
+	with pending_lock:
+		request, path = body['request'], body['page']
+		stream = notebook_answer_streams.get(request)
+		job = notebook_jobs.get(request)
+		if (not stream or not job or job[1] != path or pend('').get(path) != job or
+			time.time()-job[2] >= ANSWER_WAIT or body['after'] >= len(stream['chunks'])):
+			raise ValueError('Answer stream is absent, expired, superseded or out of sequence')
+		# A failed/changed page never exposes additional queued prose. Existing
+		# page guards remain exact; native continuation must explicitly reconcile
+		# its own acknowledged text changes before this route can be deployed.
+		if stream['stopped'] or answers.get(path) == 'failed':
+			return {'request':request,'state':'failed','chunks':[]}
+		reason = model_page_stop_reason(stream['context'])
+		if reason:
+			stream['stopped'] = True
+			answers[path] = 'failed'
+			reply_errors[path] = 'Notebook model '+reason+'; request stopped before insertion; no automatic resend'
+			return {'request':request,'state':'failed','chunks':[]}
+		if answers.get(path) not in ('waiting','ready'):
+			raise ValueError('Answer stream is not readable during native insertion')
+		return {'request':request,'state':answers[path],
+			'chunks':[dict(chunk) for chunk in stream['chunks'][body['after']+1:]]}
+
+
+REPAIR_NOTE = ('\n\nYour previous reply for this page was refused by the drawing checker before anything was '
+	'drawn: %s. Write a new complete reply that avoids that problem. Keep the same teaching idea; a simpler '
+	'drawing with fewer objects and labels is better than a refused one.')
+# A box-and-arrow network that will not fit fails the same way twice (IRIS reply, 2026-10-30
+# 15:21); the drawn-primitives family always lays out, dropping any label that collides.
+LAYOUT_REPAIR_NOTE = (' The checker could not fit that scene on the page: do not send another box-and-arrow '
+	'network. Use the scene family "drawing" with a few simple primitives and short labels, and keep the picture.')
+PICTURE_NOTE = ('\n\nPicture: every lesson reply carries a top-level "picture" object, {"base": "...", "edits": ["..."], "labels": [["..."]]}, '
+	'whatever the subject: people, history, music, places and ideas as much as science. The picture is an explainer '
+	'doodle whose frames tell the explanation step by step; for people, history and music it shows the scenes, places, '
+	'instruments and crowds that belong to the topic, one moment of the story per frame. Show '
+	'real people as invented characters who carry that spirit, never as likenesses of the real people. '
+	'An image model draws it as black line art, and it replaces your drawing when it works; your steps\' drawing stays '
+	'as the fallback, so still write it. Each frame is a picture of its own, drawn on the page right below its '
+	'caption, like the pictures down the pages of a picture book, so the reader never looks back up. base is the first '
+	'picture, in one or two concrete sentences: the main subject and a few supporting objects, their shapes and where '
+	'they sit. Use the fewest objects the explanation needs, each in its true physical '
+	'relation, as it would really rest: say what rests on what and what touches what (the rock sits on the ground). '
+	'Describe plain shapes, not materials or textures (a plank, not a wooden plank), and never name a character: say '
+	'"a girl" or "a crow". edits has exactly one entry per later step, in order; each is the next picture, a whole new '
+	'drawing of the same characters and things showing the moment its caption explains, or "" when that step needs no '
+	'new picture and its words follow the picture above: one to four pictures in all. Describe everything that '
+	'picture shows, in absolute terms: which end rests on the ground, what is up in the air, what is near what (the '
+	'plank\'s left end rests on the ground under the girl; its right end is high under the rock, holding it up; the '
+	'stone sits under the plank near the rock). The first picture shows the setup, so the explaining happens in the '
+	'pictures after it: each shows what changed, with at most two arrows for a force or a motion, large enough to see, '
+	'and never repeats an earlier picture\'s arrows. Arrows and paths are '
+	'solid lines: never ask for a dashed or dotted line. Draw a group of many things (a city, a crowd, a forest, rain) '
+	'as three to five large ones, never a field of small ones. '
+	'The picture must be true to its subject and agree with your captions. '
+	'Describe things, not words: no text, letters, numbers or labels in the picture, since the captions carry the words. '
+	'Give the picture "labels" too: one list per frame, base first, of up to three things that frame draws that the '
+	'captions name, each one or two plain words exactly as the captions say them ("fulcrum", "load", "push"); they are '
+	'lettered beside the drawing with a line pointing at the thing. '
+	'When the question also needs a technical explanation (a graph, a measured diagram, an equation), make the reply a '
+	'composite: the picture tells the story\'s introduction with its own "captions", 1 to 3 of them, and edits has one '
+	'entry per caption after the first. Your steps then follow below the picture as the technical figure: '
+	'captions that explain with the labels and the equation, in the same characters\' voice (Mira points at '
+	'the line), without retelling the story.')
+
+
+# The story carries the lesson: James graded the earlier replies 2/5, textbook paragraphs with a story pasted on and a
+# stock robot standing by (scorecard, 2026-10-31). The system prompt's "small round robot" is countered here.
+OPENING_NOTE = ('\n\nStory: a lesson reply is written out by hand and already begins "%s". Tell it as a tale '
+	'that carries on from those words: the first caption (the picture\'s first caption, in a composite) continues that '
+	'sentence, starting with "..." and a lowercase word, for example "... a girl named Mira pushed her little boat off '
+	'the sand." When the question asks how or why, make the plot the explanation: one or two named characters who '
+	'want something, and what they do and what happens to them is the cause and effect being taught. Give it 4 to 6 '
+	'beats with a shape: what they want, a first try or a puzzle, what surprises them, the discovery that is the '
+	'answer, and how it ends. When it asks what or who something is, the subject itself is the named hero in its home '
+	'("... in a snowy forest lived a raven named Thomas"), then three episodes, each one of its most remarkable true '
+	'traits, never its dictionary definition: the hero does something and a "because" in the same sentence gives the '
+	'real reason; time moves on between them ("One day", "Later that winter"); the last caption begins "And so" and '
+	'says what it is as the moral; the picture gives each episode a picture of its own. Never a bystander who "learns that" a '
+	'fact. Each caption is an '
+	'event in the tale, not narrator prose about the topic; say amounts as the characters feel them ("twice as far", '
+	'"light as a feather"), with no units or figures unless the question asks for them. Invent fresh characters who belong to the subject (a child, a sailor, a baker, a crow); '
+	'never a robot. Show real people through an invented character who carries their spirit, with every fact true. '
+	'Write short sentences meant to be heard, with concrete images; no hedges or textbook phrases ("illustrative '
+	'values", "in summary", "it is important"). Each beat needs the one before, and the last caption lands the answer '
+	'to what was asked. The takeaway says the answer plainly in one sentence, then asks James one short question to '
+	'wonder about. Answer what was asked: do not say what a person or thing is not, or does not do, unless the '
+	'question asks.')
+
+FIGURE_NOTE = ('\n\nFigure: when the answer turns on something you can point to (a threshold, a limit, a proven range, a '
+	'boundary, a quantity that changed), put it on the figure. Draw it to scale against the figure\'s own axes or objects, '
+	'in a step of its own, labeled with its value. Show what it settles: shade what it rules out or covers, and leave what '
+	'is still open unshaded and labeled as open. Build the figure so each step adds one idea its caption explains: the '
+	'setting, then what was known, then what is new, then what remains open. Make the figure fill the full height of '
+	'its drawing area, with the deciding region large enough to read at a glance, and keep every label the answer '
+	'depends on (shorten a label rather than drop it). A label takes about 9 units of width per letter and 30 of '
+	'height: where a region is too narrow for its label, write the label beside it with an arrow pointing in, and '
+	'keep every label inside the drawing.')
+
+
+def direct_picture(reply):
+	"""A picture for a lesson the model sent without one, written from its captions, or None. The answering model
+	leaves it out now and then (Slightly Stoopid, the Riemann hypothesis); the page should not lose its picture."""
+	captions = [s.get('caption', '') for s in reply.get('steps', []) if isinstance(s, dict)]
+	if not captions or not all(isinstance(c, str) and c.strip() for c in captions):
+		return None
+	try:
+		return _picture(notebook_image_model.direct(PICTURE_NOTE, str(reply.get('intent', '')), captions,
+			str(reply.get('takeaway', ''))), len(captions))
+	except Exception as error:  # the procedural drawing stands
+		trace.event('picture', 'undirected', reason=f'{type(error).__name__}: {error}'[:300])
+		return None
+
+
+class Frames(list):
+	labels = None  # per frame, [(name, 0..1000 box)] for the labels located in that frame
+	scenes = False  # each frame a picture of its own, drawn below its caption
+	steps = None  # the step each frame belongs to, when a step shares the picture above it
+
+
+# Each frame of a new picture is a picture of its own under its paragraph (James, 2026-11-01: "inline each drawing
+# with the text... instead of scrolling back up"); a picture kept from before is replayed as it was drawn, one growing
+# picture.
+SCENES = True
+
+
+def picture_frames(picture):
+	"""Frames already rendered for a reply's picture, with its located labels; never calls a model inside a tablet
+	request."""
+	try:
+		frames = Frames(notebook_image_model.frames(picture['base'], picture['edits'], cached=True, scenes=True))
+		frames.scenes = True
+	except LookupError:  # drawn before pictures had scenes, or replayed from then
+		frames = Frames(notebook_image_model.frames(picture['base'], picture['edits'], cached=True))
+	frames.steps = notebook_image_model.drawn_steps(picture['edits'], len(frames))
+	if picture.get('labels'):  # a picture that ended early keeps its earlier frames' labels
+		labels = []
+		for frame, names in zip(frames, [picture['labels'][s] for s in frames.steps if s < len(picture['labels'])]):
+			try:
+				boxes = notebook_image_model.locate(frame, names, cached=True) if names else {}
+			except LookupError:  # that frame unlabeled
+				boxes = {}
+			labels.append([(n, boxes[n]) for n in names if n in boxes])
+		frames.labels = labels
+	return frames
+
+
+def locate_labels(picture, frames, request=None, path=None):
+	"""Find each frame's labels in that frame, off the tablet's request (each thing is named where it first appears, and
+	a later edit may have dropped it); the count found, or None."""
+	labels = picture.get('labels') or []
+	labels = [labels[s] for s in notebook_image_model.drawn_steps(picture['edits'], len(frames)) if s < len(labels)]
+	if not any(labels[:len(frames)]):
+		return None
+	def one(frame, names):
+		try:
+			return len(notebook_image_model.locate(frame, names)) if names else 0
+		except Exception as error:  # the picture still draws, that frame unlabeled
+			trace.event('labels', 'failed', request=request, path=path, reason=f'{type(error).__name__}: {error}'[:300])
+			return 0
+	from concurrent.futures import ThreadPoolExecutor
+	with ThreadPoolExecutor(min(len(frames), len(labels))) as pool:
+		return sum(pool.map(one, frames, labels))
+
+
+# Who a notebook message can go to on Buzz, by display name (James's roster, 2026-10-22). Dead Rabbit is the R1's own
+# voice and is never addressed. Pi Dog posts it, as itself, in waggle-test.
+BUZZ_MEMBERS = ('My Dude', 'Dennis', 'Kerouac', 'Neil', 'GrokDoggyDog', 'MC Claude', 'DJ Codex', 'Pi Dog', 'Luke Dog')
+BUZZ_CHANNEL = ('waggle-test', 'a8186b53-537d-46ad-a7e7-b6486c58970e')
+SEND_KEEP = 1800  # seconds a message shown on its page waits for James's yes
+pending_sends = {}  # page path -> {'to', 'text', 'request', 't'} (+ 'via', 'number', 'png' for a text)
+note_frames = {}  # page path -> (frame, baseline) of its latest Respond, newest 8 pages
+VIA = {'imessage': 'iMessage', 'sms': 'SMS'}
+
+SEND_NOTE = ('\n\nSending: when the writing asks to send, post or message something to someone on Buzz, do not answer '
+	'it. Reply {"v":1,"mode":"send","to":["<name>"],"text":"<the message>"} instead. "to" names one to three of %s, '
+	'spelled exactly as here (take the closest name to what is written). "text" is the message itself, faithful to what '
+	'the writing asks, in plain words, without the recipient\'s name. To text a handwritten note to a person, add '
+	'"via":"imessage" ("sms" only when the writing says SMS), "to" the one name as written ("me" for James himself), '
+	'"text" the note\'s words, and "ink":"above" when the note is written above the line asking to send it, "below" '
+	'when below it, or "none" when the note is only inside that line. James confirms it on the page before it is sent.')
+CONFIRM_NOTE = ('\n\nWaiting on this page for James\'s yes: a message to %s, "%s". If the new writing says yes, '
+	'send or ok, reply {"v":1,"mode":"confirm","send":true}; if it says no, cancel or drop it, reply {"v":1,"mode":'
+	'"confirm","send":false}. Otherwise answer the new writing as usual, and the message keeps waiting.')
+PIDOG_POST = ('James confirmed this message on his notebook page (herd-board %s). Post it now with nvoy_channel_post: '
+	'channel %s, mention %s, and text exactly as follows, nothing added or changed: %s')
+
+
+def at(names):
+	return ' and '.join('@'+n for n in names)
+
+
+def waiting_send(path):
+	"""The Buzz message waiting on this page for James's yes, if it has not expired."""
+	with pending_lock:
+		waiting = pending_sends.get(path)
+		if waiting and time.time()-waiting['t'] > SEND_KEEP:
+			del pending_sends[path]
+			trace.event('sent', 'expired', request=waiting['request'], path=path)
+			waiting = None
+	return waiting
+
+
+def recipient(waiting):
+	if waiting.get('via'):
+		return f"{waiting['to'][0]} by {VIA[waiting['via']]} (number ending {notebook_messages.ending(waiting['number'])})"
+	return at(waiting['to'])
+
+
+def text_send(parsed, request, path):
+	"""A handwritten note for one contact: James's own ink cut from the page, or the words in his hand."""
+	via, name = parsed['via'], parsed['to'][0]
+	try:
+		found = notebook_messages.lookup(name)
+	except (OSError, subprocess.TimeoutExpired) as error:
+		trace.event('sent', 'failed', request=request, path=path, via=via, reason=f'contacts: {type(error).__name__}: {error}'[:300])
+		return ('I could not look up your contacts on the Mac, so nothing is waiting to send. The Mac may be asking '
+			'for permission to use Contacts.'), None
+	if len(found) != 1:
+		trace.event('sent', 'unknown', request=request, path=path, via=via, matches=len(found))
+		return ((f"I could not find {name} with a phone number in your contacts." if not found else
+			f"{name} matches {', '.join(n for n, _ in found[:4])}. Write the request again with the full name."),
+			None)
+	full, number = found[0]
+	frame, baseline = note_frames.get(path, (None, None))
+	try:
+		# Only ink newer than the saved page is his note: without that baseline the cut would take the whole page.
+		png = (notebook_handwritten_note.note_png(frame, baseline, parsed['ink'])
+			if frame and baseline is not None and parsed['ink'] != 'none' else None)
+	except ValueError as error:  # an odd capture: the words written out in his hand still go
+		trace.event('sent', 'note', request=request, path=path, reason=str(error)[:200])
+		png = None
+	kind = 'your handwritten note' if png else 'the note written out in your hand'
+	png = png or notebook_handwritten_note.written_png(parsed['text'])
+	folder = os.path.join(CACHE, 'outbox')
+	os.makedirs(folder, mode=0o700, exist_ok=True)
+	where = os.path.join(folder, request+'.png')
+	with os.fdopen(os.open(where, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'wb') as f:
+		f.write(png)
+	waiting = {'to': [full], 'text': parsed['text'], 'request': request, 't': time.time(), 'via': via,
+		'number': number, 'png': where}
+	trace.event('sent', 'shown', request=request, path=path, via=via, picture=kind, png_bytes=len(png))
+	return (f"Ready to send to {recipient(waiting)}: {kind}, as a picture, reading \"{parsed['text']}\"."
+		"\n\nAnswer yes to send it, or no to drop it."), waiting
+
+
+def page_send(parsed, request, path, current):
+	"""What the page says for a send or confirm reply, and the message to hold for James's yes. Nothing leaves the
+	tablet until he writes yes on the same page; then Pi Dog's own session posts a Buzz message, as Pi Dog, or the
+	Mac's Messages app texts the note."""
+	if parsed['mode'] == 'send' and parsed.get('via'):
+		return text_send(parsed, request, path)
+	if parsed['mode'] == 'send':
+		known = {m.casefold(): m for m in BUZZ_MEMBERS}
+		unknown = [n for n in parsed['to'] if n.casefold() not in known]
+		if unknown:
+			trace.event('sent', 'unknown', request=request, path=path, to=unknown)
+			return (f"I could not find {', '.join(unknown)} on Buzz, so nothing is waiting to send. Write the request "
+				f"again with one of: {', '.join(BUZZ_MEMBERS)}."), None
+		to = list(dict.fromkeys(known[n.casefold()] for n in parsed['to']))
+		trace.event('sent', 'shown', request=request, path=path, to=to, chars=len(parsed['text']))
+		return (f"Ready to post on Buzz in #{BUZZ_CHANNEL[0]}, as Pi Dog, to {at(to)}:\n\n{parsed['text']}\n\n"
+			"Answer yes to send it, or no to drop it."), {'to': to, 'text': parsed['text'],
+			'request': request, 't': time.time()}
+	with pending_lock:
+		if not current():
+			raise ModelTransportError('cancelled')
+		waiting = waiting_send(path)
+		pending_sends.pop(path, None)  # one yes sends once
+	if not waiting:
+		return 'There is no message waiting on this page, so nothing was sent.', None
+	if not parsed['send']:
+		trace.event('sent', 'dropped', request=request, path=path, shown=waiting['request'])
+		return f"Not sent. The message to {recipient(waiting)} is dropped.", None
+	if waiting.get('via'):
+		try:
+			notebook_messages.send_picture(waiting['via'], waiting['number'], waiting['png'], waiting['request'])
+		except (OSError, subprocess.TimeoutExpired) as error:
+			with pending_lock:
+				pending_sends.setdefault(path, waiting)
+			trace.event('sent', 'failed', request=request, path=path, shown=waiting['request'], via=waiting['via'],
+				reason=f'{type(error).__name__}: {error}'[:300])
+			return (f"Not sent: Messages on the Mac did not take it (it may be asking for permission). The note to "
+				f"{recipient(waiting)} is still waiting; answer yes again to retry."), None
+		trace.event('sent', 'handed', request=request, path=path, shown=waiting['request'], via=waiting['via'])
+		return f"Handed to Messages to send to {recipient(waiting)}.", None
+	try:
+		pane = next((a['pane_id'] for a in agent_list() if a.get('name') == 'pidog'), None)
+		if not pane:
+			raise LookupError('Pi Dog has no desk open')
+		send(pane, PIDOG_POST % (request, BUZZ_CHANNEL[1], json.dumps(waiting['to']), at(waiting['to'])+' '+waiting['text']))
+	except Exception as error:
+		with pending_lock:
+			pending_sends.setdefault(path, waiting)  # still waiting: another yes tries again
+		trace.event('sent', 'failed', request=request, path=path, shown=waiting['request'],
+			reason=f'{type(error).__name__}: {error}'[:300])
+		return (f"Not sent: Pi Dog could not be reached. The message to {at(waiting['to'])} is still waiting; answer yes "
+			"again to retry."), None
+	trace.event('sent', 'handed', request=request, path=path, shown=waiting['request'], to=waiting['to'])
+	return f"Handed to Pi Dog to post on Buzz in #{BUZZ_CHANNEL[0]}, to {at(waiting['to'])}.", None
+
+
+def lesson_notes(image_context, path=None):
+	"""The sending, opening, figure and picture notes a lesson call carries after the page's description."""
+	waiting = waiting_send(path)
+	note = (CONFIRM_NOTE % (recipient(waiting), waiting['text']) if waiting else SEND_NOTE % ', '.join(BUZZ_MEMBERS))
+	if len((image_context+note).encode()) <= 9000:
+		image_context += note
+	config = lesson_rollout_config()
+	if config.get('reader') and config.get('reply_hand'):
+		opening = OPENING_NOTE % f"{config['reader']}, {config.get('opening', 'once upon a time...')}"
+		if len((image_context+opening).encode()) <= 10000:
+			image_context += opening
+	if len((image_context+FIGURE_NOTE).encode()) <= 10500:
+		image_context += FIGURE_NOTE
+	if config.get('picture') == 'image' and len((image_context+PICTURE_NOTE).encode()) <= 11000:
+		image_context += PICTURE_NOTE  # leaves room for a repair note under the 12000-byte context bound
+	return image_context
+
+
+# herd-board-primer's spoken question, asked while its pen writes it: page path -> the answer on its way.
+primer_prestarts, PRESTART_KEEP = {}, 120  # seconds a prestarted answer waits for its press
+
+
+def primer_prestart(q):
+	"""Start the model on the page as Respond will capture it once the pen has written: the live screen with the
+	question's strokes drawn where they will go. The press still makes every check and uses this answer only for
+	its first attempt. {"doc", "page", "strokes": [[[x, y], ...], ...]} or {"doc", "page", "cancel": true}
+	"replay": a kept reply's request id answers with that reply again instead of the model, to film a lesson again.
+	"question": the question's text, which is looked up for current facts before the model is asked."""
+	doc, page = str(q.get('doc', '')), str(q.get('page', ''))
+	replay, question = q.get('replay'), q.get('question')
+	if question is not None and not (isinstance(question, str) and 0 < len(question) <= 300):
+		raise ValueError('question must be 1 to 300 characters')
+	if replay is not None and not (isinstance(replay, str) and re.fullmatch(r'notebook-[0-9a-f]{32}', replay) and
+			os.path.isfile(os.path.join(CACHE, 'replies', replay+'.json'))):
+		raise ValueError('replay needs a kept reply')
+	if not re.fullmatch(r"[0-9a-f-]{36}", doc) or not re.fullmatch(r"[0-9a-f-]{36}", page):
+		raise ValueError('prestart requires notebook and page UUIDs')
+	path = f"{doc}/{page}.rm"
+	if q.get('cancel') is True:
+		with pending_lock:
+			entry = primer_prestarts.pop(path, None)
+		if entry:
+			entry['current'] = lambda: False
+		trace.event('primer', 'prestart cancelled', path=path, found=bool(entry))
+		return {'cancelled': bool(entry)}
+	strokes = q.get('strokes')
+	if (not isinstance(strokes, list) or not 0 < len(strokes) <= 3000 or sum(map(len, strokes)) > 60000 or
+		any(not s or any(not isinstance(p, list) or len(p) != 2 or
+			any(type(n) not in (int, float) or not 0 <= n < 1872 for n in p) for p in s) for s in strokes)):
+		raise ValueError('prestart strokes out of bounds')
+	m = re.search(rb'"visibleName": "[Tt]o ([^"]+)"', tablet(f"cat {XOCHITL}/{doc}.metadata"))
+	route = notebook_model_route(doc, m.group(1).decode() if m else '', True)
+	if not route or route.get('response_format') in ('story-panel-v1', 'story-stream-v1', 'role-production-v1'):
+		raise ValueError('prestart needs the lesson model route')
+	context = device_context.snapshot()
+	if context.get('doc') != doc or context.get('page') != page or not model_page_current(context):
+		raise ValueError('prestart requires the unchanged active page')
+	from PIL import Image, ImageDraw
+	frame = live_capture(tablet).convert('L')
+	draw = ImageDraw.Draw(frame)
+	for s in strokes:
+		draw.line([tuple(p) for p in s] if len(s) > 1 else [tuple(s[0])]*2, fill=0, width=4)
+	baseline = None
+	if os.path.isfile(live_baseline(path)):
+		with Image.open(live_baseline(path)) as saved:
+			baseline = saved.convert('L')
+	crop, image_context = notebook_visual_input(frame, baseline)
+	if crop is None:
+		raise ValueError('prestart found no question on the page')
+	png, image_context = live_png(crop), lesson_notes(image_context, path)
+	entry = {'t': time.time(), 'done': threading.Event(), 'result': None, 'observed': None, 'error': None,
+		'current': lambda: True}
+	def run():
+		def observe(raw):
+			entry['observed'] = raw
+		request = 'notebook-'+os.urandom(16).hex()
+		context = image_context
+		try:
+			if not replay and not waiting_send(path):  # a yes or no needs no tale and no web search
+				context = with_story(context, png, question, request, path)
+			entry['context'] = context  # a retry after a refused answer keeps the facts
+			if replay:
+				with open(os.path.join(CACHE, 'replies', replay+'.json')) as f:
+					kept = dict(json.load(f), request_id=request)
+				entry['result'] = validate_model_result(json.dumps(kept).encode(), request, observe_response=observe)
+				replay_picture(replay, entry['result'], request, path)
+			else:
+				entry['result'] = call_notebook_model(route['socket'], request, png, context,
+					deadline_ms=route['deadline_ms'], is_current=lambda: entry['current'](), observe_response=observe)
+		except Exception as error:
+			entry['error'] = error
+		finally:
+			entry['done'].set()
+	with pending_lock:
+		old = primer_prestarts.pop(path, None)
+		if old:
+			old['current'] = lambda: False
+		primer_prestarts[path] = entry
+	threading.Thread(target=run, daemon=True).start()
+	trace.event('primer', 'prestarted', path=path, png_bytes=len(png), replay=replay)
+	return {'prestarted': True}
+
+
+FACTS_NOTE = ('\n\nCurrent facts, from a web search today (%s), which may be newer than what you know: %s '
+	'Where they bear on the question, teach from them. When they report a new research result, name what it does and '
+	'does not show, and draw its result on the figure; when they give more than one, the newest is the lesson and its '
+	'figure, and the older ones are mentioned only in passing. Do not tell the reader what the sources fail to show '
+	'unless the question asks.')
+
+
+BEATS_NOTE = ('\n\nThe story is already written: use exactly these captions, one step per caption and in this order, '
+	'and exactly this takeaway, word for word. Your job is the drawing: each step adds what its "see" line asks for, so '
+	'the picture tells the story on its own, and the picture object follows the same beats: a step whose "see" is empty '
+	'gets the edit "". Captions: %s Takeaway: %s')
+
+
+TALES = os.path.join(CACHE, 'tales')  # each page's newest tale, which the R1 Primer starts telling before it is drawn
+
+
+def save_tale(path, tale):
+	try:
+		os.makedirs(TALES, exist_ok=True)
+		name = os.path.join(TALES, path.replace('/', '_')+'.json')
+		with open(name+'.new', 'w') as f:
+			json.dump(dict(tale, t=time.time()), f, ensure_ascii=False)
+		os.replace(name+'.new', name)
+	except OSError as error:  # the Primer then narrates from the finished reply
+		trace.event('story', 'not saved', path=path, reason=str(error)[:200])
+
+
+def with_story(image_context, png, question, request, path):
+	"""image_context with the tale written first for the answering model to draw (notebook_image_model.story), told
+	what a web search finds current when the question's text is known. Without a tale (a page that is not a lesson,
+	the writer failing, or "story" off in the rollout file) the answering model gets the facts and writes its own."""
+	found, config = '', lesson_rollout_config()
+	if question:
+		started = time.monotonic()
+		try:
+			found = notebook_image_model.facts(question)
+		except Exception as error:  # the tale is still told from what the writer knows
+			trace.event('facts', 'failed', request=request, path=path, reason=f'{type(error).__name__}: {error}'[:300])
+		else:
+			trace.event('facts', 'found' if found else 'none', request=request, path=path,
+				ms=round((time.monotonic()-started)*1000), facts=found[:300] or None)
+	if config.get('story'):
+		started = time.monotonic()
+		reader = config.get('reader') or 'James'
+		opening = f"{reader}, {config.get('opening', 'once upon a time...')}"
+		try:
+			tale = notebook_image_model.story(png, question, found, reader=reader, opening=opening)
+		except Exception as error:  # the answering model writes its own tale
+			tale = None
+			trace.event('story', 'failed', request=request, path=path, reason=f'{type(error).__name__}: {error}'[:300])
+		else:
+			note = tale and BEATS_NOTE % (json.dumps(tale['steps'], ensure_ascii=False),
+				json.dumps(tale['takeaway'], ensure_ascii=False))
+			# The opening note's rules are for a tale Pi Dog writes itself; on 2026-11-01 its 2 KB pushed Opus's
+			# raven over the bound and Pi Dog told a thin one of its own.
+			told = image_context.replace(OPENING_NOTE % opening, '')
+			fits = bool(note) and len((told+note).encode()) <= 11300  # room for a repair note
+			trace.event('story', 'written' if fits else 'too long' if note else 'not a lesson', request=request,
+				path=path, ms=round((time.monotonic()-started)*1000), steps=len(tale['steps']) if tale else 0,
+				bytes=len((told+note).encode()) if note else None)
+			if fits:
+				save_tale(path, tale)
+				return told+note
+	note = FACTS_NOTE % (time.strftime('%B %-d, %Y'), found) if found else ''
+	return image_context+note if note and len((image_context+note).encode()) <= 11300 else image_context
+
+
+def take_prestart(path):
+	with pending_lock:
+		entry = primer_prestarts.pop(path, None)
+	return entry if entry and time.time()-entry['t'] < PRESTART_KEEP else None
+
+
+def notebook_model_answer(job, route, png, context, image_context=LATEST_IMAGE_CONTEXT, prestart=None):
+	"""Bounded isolated generation; publish only to its unchanged pending job."""
+	path, request = job[1], job[4]
+	stop_reason = None
+	observed_response = None
+	semantic_rejected = False
+	def observe_response(raw):
+		nonlocal observed_response
+		observed_response = raw  # immutable bounded envelope; no publication
+	streaming = route.get('response_format') == 'story-stream-v1'
+	def bound():
+		return (notebook_jobs.get(request) == job and pend('').get(path) == job and
+			answers.get(path) == 'waiting' and time.time()-job[2] < ANSWER_WAIT)
+	def current():
+		nonlocal stop_reason
+		with pending_lock:
+			if not bound():
+				return False
+			if stop_reason is not None:
+				return False  # Returning to the page cannot revive an already-cancelled call.
+			stop_reason = model_page_stop_reason(context)
+			return stop_reason is None
+	def on_answer(chunk):
+		# Revalidate the callback boundary too, including injected providers.
+		from notebook_lesson import _text
+		with pending_lock:
+			if not current(): raise ModelTransportError('cancelled')
+			stream = notebook_answer_streams[request]
+			if (not isinstance(chunk,dict) or set(chunk) != {'sequence','text'} or
+				type(chunk['sequence']) is not int or chunk['sequence'] != len(stream['chunks']) or
+				len(stream['chunks']) >= 3):
+				raise ModelTransportError('invalid_response')
+			text = _text(chunk['text'],160)
+			text.encode('utf-8')
+			if sum(len(c['text']) for c in stream['chunks'])+len(text)>400:
+				raise ModelTransportError('reply_too_large')
+			stream['chunks'].append(dict(sequence=chunk['sequence'],text=text))
+			reply_timings.setdefault(path,{}).setdefault('answer_chunk_queued',time.monotonic())
+	try:
+		started = time.monotonic()
+		if streaming:
+			with pending_lock:
+				if not current() or request in notebook_answer_streams:
+					raise ModelTransportError('cancelled')
+				# Bound storage by active pages, not the lifetime of the server.
+				active = {j[4] for j in pend('').values() if len(j)>4 and time.time()-j[2]<ANSWER_WAIT}
+				for old in list(notebook_answer_streams):
+					if old not in active: notebook_answer_streams.pop(old)
+				notebook_answer_streams[request] = dict(context=dict(context),chunks=[],stopped=False)
+		if route.get('response_format') in ('story-panel-v1','story-stream-v1','role-production-v1'):
+			result = generate_notebook_story(route.get('socket'), request, png,
+				deadline_ms=route['deadline_ms'], is_current=current, image_context=image_context,
+				**({'roles':route['roles']} if route.get('response_format') == 'role-production-v1' else {}),
+				**({'on_answer':on_answer} if streaming else {}))
+		else:
+			# A reply the checker refuses gets two more tries, told why. Nothing has reached the page yet.
+			# (IRIS, 2026-10-30: a layout refusal, then a retry that wrote a number as a word.)
+			image_context = lesson_notes(image_context, path)
+			if not prestart and not waiting_send(path):
+				image_context = with_story(image_context, png, None, request, path)
+			attempt_context, refused_layout = image_context, False
+			for attempt in (1, 2, 3):
+				try:
+					if attempt == 1 and prestart:
+						# Asked while the Primer's pen wrote the question: this press's checks above, that answer.
+						prestart['current'] = current
+						trace.event('composed', 'prestarted', request=request, path=path, ready=prestart['done'].is_set())
+						prestart['done'].wait(route['deadline_ms']/1000)
+						observed_response = prestart['observed']
+						image_context = prestart.get('context') or image_context
+						attempt_context = image_context  # an answer the prestart did not finish is asked again with its tale
+						if isinstance(prestart['error'], ModelTransportError):
+							raise prestart['error']
+						if prestart['result'] is not None and current():
+							result = prestart['result']
+							break
+					result = call_notebook_model(route['socket'], request, png,
+						attempt_context,
+						deadline_ms=route['deadline_ms'], is_current=current, observe_response=observe_response)
+					break
+				except ModelTransportError as error:
+					semantic_rejected = error.code in ('invalid_response','invalid_json') and observed_response is not None
+					detail = getattr(error, 'detail', None)
+					if attempt == 3 or not semantic_rejected or not detail or not current():
+						raise
+					trace.event('composed', 'retry', request=request, path=path, reason=detail)
+					observed_response = None
+					# Once a scene would not fit, every later try is steered away from it.
+					refused_layout = refused_layout or 'simplify the scene' in detail
+					attempt_context = image_context + REPAIR_NOTE % detail + (LAYOUT_REPAIR_NOTE if refused_layout else '')
+		trace.event('composed', request=request, path=path, ms=round((time.monotonic()-started)*1000))
+		try:
+			reply = json.loads(result['text'])
+		except (TypeError, ValueError):
+			reply = {}
+		parsed = result.get('parsed') or {}
+		trace.event('rendered', request=request, path=path, mode=parsed.get('mode') or reply.get('mode'),
+			intent=reply.get('intent') if isinstance(reply, dict) else None,
+			labels_left_out=[text for _, text in (parsed.get('plan') or {}).get('dropped_labels', [])] or None)
+		waiting = None
+		if parsed.get('mode') in ('send', 'confirm'):
+			text, waiting = page_send(parsed, request, path, current)
+			result['text'] = json.dumps({'v': 1, 'mode': 'answer', 'text': text})
+			if observed_response is not None:
+				# Kept as the page shows it: the Primer speaks this, and a replay can never send again.
+				observed_response = json.dumps(dict(json.loads(observed_response), text=result['text'])).encode()
+		if observed_response is not None:
+			keep_reply(request, observed_response)
+		if (parsed.get('mode') == 'lesson' and 'picture' not in parsed and
+				isinstance(reply, dict) and lesson_rollout_config().get('picture') == 'image'):
+			# A picture the checker refused (IRIS reply, 2026-10-30: wrong edit count) is directed afresh, like a missing one.
+			refused = parsed.pop('picture_refused', None)
+			directed = direct_picture(reply)
+			trace.event('picture', 'directed' if directed else 'refused' if refused else 'missing', request=request, path=path,
+				reason=(refused and 'refused: ' + refused) if directed or refused else
+					'the lesson came without a picture and none could be directed')
+			if directed:
+				reply['picture'] = parsed['picture'] = directed
+				result['text'] = json.dumps(reply)
+		if parsed.get('picture') and lesson_rollout_config().get('picture') == 'image':
+			# Render now, off the tablet's request; preparation later reads only the cached frames.
+			drawn = time.monotonic()
+			try:
+				rendered = notebook_image_model.frames(parsed['picture']['base'], parsed['picture']['edits'], scenes=SCENES)
+				notebook_image_model.keep(request, rendered, dict(parsed['picture'], scenes=SCENES))
+				located = locate_labels(parsed['picture'], rendered, request, path)
+				trace.event('picture', request=request, path=path, frames=len(rendered), labels=located,
+					ms=round((time.monotonic()-drawn)*1000))
+			except Exception as error:  # the procedural drawing stands
+				trace.event('picture', 'failed', request=request, path=path, reason=f'{type(error).__name__}: {error}'[:300])
+		with pending_lock:
+			if not current():
+				raise ModelTransportError('cancelled')
+			notebook_reply(request, result['text'])
+			if waiting:
+				pending_sends[path] = waiting
+			timings = reply_timings.setdefault(path,{})
+			timings['model_completed'] = time.monotonic()
+			first = result['metrics']['first_text_ms']
+			if first is not None:
+				timings['model_first_text'] = started+first/1000
+	except Exception as error:
+		trace.event('composed', 'failed', request=request, path=path, code=getattr(error, 'code', type(error).__name__),
+			reason=getattr(error, 'detail', None) or str(error), stop=stop_reason)
+		with pending_lock:
+			if streaming and request in notebook_answer_streams:
+				notebook_answer_streams[request]['stopped'] = True
+			if bound():
+				answers[path] = 'failed'
+				code = error.code if isinstance(error,ModelTransportError) else 'invalid_response'
+				if semantic_rejected:
+					try:
+						retain_rejected_reply(CACHE, request, observed_response)
+					except (OSError, ValueError):
+						print('Notebook rejection evidence unavailable; reply still held', file=sys.stderr, flush=True)
+				if code == 'cancelled' and stop_reason is not None:
+					reply_errors[path] = 'Notebook model '+stop_reason+'; request stopped before insertion; no automatic resend'
+				else:
+					reply_errors[path] = 'Notebook model '+code+'; reply held, no automatic resend'
+
+
+def replay_picture(replay, result, request, path):
+	"""Puts the frames the replayed reply drew back in the cache, so the replay draws its picture, not a new one.
+	The picture is the one kept with the frames (Long Island Sound's was directed, 2026-10-31), else the parsed reply's:
+	a kept raw reply can be ragged JSON (the raven, 2026-10-30)."""
+	try:
+		parsed = result.get('parsed') or {}
+		picture = notebook_image_model.kept_picture(replay) or parsed.get('picture') or {}
+		count = notebook_image_model.replayed(replay, picture['base'], picture.get('edits') or [],
+			scenes=picture.pop('scenes', False))
+		if count and parsed.get('mode') == 'lesson' and parsed.get('picture') != picture:
+			# Drawn as it was then, not refused or directed afresh; preparation reads the picture from the text.
+			reply = json.loads(result['text'])
+			reply['picture'] = parsed['picture'] = picture
+			parsed.pop('picture_refused', None)
+			result['text'] = json.dumps(reply)
+		trace.event('picture', 'replayed' if count else 'not kept', request=request, path=path, replay=replay, frames=count)
+	except (KeyError, TypeError, ValueError, AttributeError, OSError) as error:  # it is drawn afresh, as before
+		trace.event('picture', 'not kept', request=request, path=path, replay=replay, reason=f'{type(error).__name__}: {error}'[:200])
+
+
+def keep_reply(request, raw):
+	"""A private copy of each accepted model reply, newest 200, for herd-board-replay. Never read by Respond."""
+	try:
+		retain_reply(CACHE, request, raw)
+		folder = os.path.join(CACHE, 'replies')
+		kept = sorted((os.path.join(folder, n) for n in os.listdir(folder) if n.startswith('notebook-')), key=os.path.getmtime)
+		for old in kept[:-200]:
+			os.unlink(old)
+	except (OSError, ValueError) as e:
+		print(time.strftime('%T'), 'reply copy unavailable:', type(e).__name__, e, file=sys.stderr, flush=True)
+
+
+def validate_lesson_notebooks(selected):
+	if (not isinstance(selected, list) or len(selected) > 128 or
+		any(not isinstance(value,str) or str(uuid.UUID(value)) != value for value in selected)):
+		raise ValueError('lesson rollout requires canonical notebook UUIDs')
+
+
+def lesson_enabled(doc):
+	"""Fail closed on malformed operator rollout configuration."""
+	if LESSON_NOTEBOOKS is not None:
+		selected = LESSON_NOTEBOOKS.split(',') if LESSON_NOTEBOOKS else []
+	else:
+		selected = lesson_rollout_config()['notebooks']
+	validate_lesson_notebooks(selected)
+	return doc in selected
+
+
+def prepare_notebook_lesson_import(path, bundle):
+	"""Stage a validated archive; native QML imports it before any foreground edit."""
+	context = native_ack_context(path)
+	content_revision = device_context.snapshot().get('content_revision')
+	if context is None:
+		raise ValueError('native lesson requires active page telemetry')
+	def guard():
+		if native_ack_context(path) != context or device_context.snapshot().get('content_revision') != content_revision:
+			raise ValueError('Page, viewport or handwriting changed during lesson preparation')
+	guard()
+	meta = json.loads(tablet(f'cat {XOCHITL}/{LESSON_SOURCE_TEMPLATE}.metadata'))
+	parent = meta.get('parent')
+	if not isinstance(parent, str) or str(uuid.UUID(parent)) != parent:
+		raise ValueError('native lesson source folder unavailable')
+	folder = json.loads(tablet(f'cat {XOCHITL}/{parent}.metadata'))
+	if folder.get('visibleName') != 'Storyboard tests (Codex)':
+		raise ValueError('native lesson source template is outside its dedicated folder')
+	template = json.loads(tablet(f'cat {XOCHITL}/{LESSON_SOURCE_TEMPLATE}.content'))
+	doc, archive = lesson_source_archive(bundle, template, parent)
+	guard()
+	remote = '/home/root/.cache/herd-board/imports/'+doc+'.rmdoc'
+	if tablet(f'mkdir -p /home/root/.cache/herd-board/imports && test ! -e {remote} '
+		f'&& (set -C; cat > {remote}.new) && mv {remote}.new {remote} && printf archive-staged', archive) != b'archive-staged':
+		raise ValueError('native lesson archive staging failed')
+	if tablet(f'dd if={remote} bs=2000001 count=1 2>/dev/null') != archive:
+		raise ValueError('native lesson archive readback mismatch')
+	guard()
+	command = dict(doc=doc, parent=parent, pages=len(bundle['sources']))
+	if bundle.get('mode') == 'story':
+		command['story_version'] = 1
+	return dict(context=context, content_revision=content_revision, command=command)
+
+
+def native_ink_current(request):
+	job = notebook_jobs.get(request)
+	if not job or len(job) < 7 or job[6] is not True or answer_status(job[1])['request'] != request or answers.get(job[1]) != 'writing':
+		raise ValueError('native ink request is no longer the current writing reply')
+	return job
+
+
+def generated_ink(block):
+	# The compiler's final equation is a separate bounded scene, not one of
+	# the authored FACTORIES. It shares the lesson rollout and blank-area guard.
+	return (block['scene'].startswith('lesson-') or (block.get('role') == 'equation' and block['scene'].startswith('equation-'))
+		or (block.get('role') == 'hand' and block['scene'].startswith('hand-')))
+
+
+def ink_scene_known(block):
+	return generated_ink(block) or block['scene'] in FACTORIES
+
+
+def native_ink_preflight(block, query, context, first):
+	native_ink_current(query['request'])
+	native_ink_source(block)
+	if not ink_scene_known(block):
+		raise ValueError(f"drawing not in the catalog: {block['scene']}")
+	generated = generated_ink(block)
+	# Roll out ONLY on the newly provisioned diagnostic notebook until the
+	# complete ordered response, preservation and reopen tests have passed.
+	if generated:
+		if not lesson_enabled(context['doc']):
+			raise ValueError('native lessons are not enabled for this notebook')
+	else:
+		metadata = json.loads(tablet(f"cat {XOCHITL}/{context['doc']}.metadata"))
+		parent = metadata.get('parent')
+		if not isinstance(parent, str) or str(uuid.UUID(parent)) != parent:
+			raise ValueError('native ink diagnostic folder identity missing')
+		folder = json.loads(tablet(f"cat {XOCHITL}/{parent}.metadata"))
+		if metadata.get('visibleName') != 'To pidog' or folder.get('visibleName') != 'Storyboard tests (Codex)':
+			raise ValueError('ordered native ink is currently restricted to its isolated test notebook')
+	if first:
+		from notebook_device import project_region, project_storyboard
+		if generated:
+			x0,y0,x1,y1 = project_region(block['width'], block['height'], context, query['origin'])
+		else:
+			x0,y0,x1,y1 = project_storyboard(FACTORIES[block['scene']](), context, query['origin'])['bounds']
+		box = (math.floor(x0)-3, math.floor(y0)-3, math.ceil(x1)+3, math.ceil(y1)+3)
+		# Same full-resolution reservation and three-pixel margin; transfer only
+		# its framebuffer rows. Page/input and request revalidation stay unchanged.
+		region = live_capture_region(tablet, box)
+		if region.point(lambda value: 255 if value < 110 else 0).getbbox():
+			raise ValueError('native diagram reservation contains existing content')
+	native_ink_current(query['request'])  # revalidate after potentially slow native I/O
+
+
+def claim_native_ink(body):
+	job = native_ink_current(body.get('request'))
+	result = native_ink_runs.claim(body, device_context.snapshot, native_ink_preflight)
+	reply_timings.setdefault(job[1], {})['ink_'+body['scene']+'_'+body['stage']+'_claimed'] = time.monotonic()
+	return result
+
+
+def complete_native_ink(body):
+	job = native_ink_current(body.get('request'))
+	result = native_ink_runs.complete(body)
+	reply_timings.setdefault(job[1], {}).setdefault('ink_'+body['scene']+'_'+body['stage']+'_committed', time.monotonic())
+	return result
+
+
+def native_saved_page(path):
+	return tablet(f'if test -f {XOCHITL}/{path}; then dd if={XOCHITL}/{path} bs=1024 count=16384 2>/dev/null; fi')
+
+
+def native_ink_proof(request, layout=None):
+	native_ink_current(request)
+	if layout is not None:
+		if (not isinstance(layout, dict) or layout.get('command', {}).get('request') != request or
+			layout.get('command', {}).get('phase') != 'after'):
+			raise ValueError('native after-layout measurement belongs to another reply')
+		measured = native_ink_runs.finish_capture(layout, device_context.snapshot, native_saved_page)
+		native_ink_current(request)
+		if measured.get('state') == 'waiting':
+			# Return to the EXISTING bounded save poll, not an immediate capture
+			# loop. Counts only; no notebook text is logged.
+			print(time.strftime('%T'), 'native save pending', measured['reason'], file=sys.stderr, flush=True)
+			return measured
+	proof = native_ink_runs.saved_proof(request, native_saved_page, native_ink_source, device_context.snapshot)
+	# Why a drawing is not yet proven saved; repeated polls with the same reason log once.
+	trace.event('ink_proof', proof['state'], request=request,
+		reason=proof.get('reason') or ('measure layout' if 'measure_layout' in proof else None), strokes=proof.get('strokes'))
+	return proof
+
+
+def matching_native_attempt(job):
+	if not isinstance(job, list) or len(job) < 7 or job[6] is not True:
+		return False
+	try:
+		with open(live_baseline(job[1]) + '.native-attempt') as stream:
+			return stream.read(200) == job[4]
+	except OSError:
+		return False
+
+
+NOTEBOOK_PENDING_LIMIT = 300  # seconds a model request may stay pending (not mid-write) before it is cleared
+
+
+def trace_image(request, what, image):
+	"""Keep a frame a check judged, for the trace (the newest 200 are kept). -> its path"""
+	folder = os.path.join(os.path.dirname(trace.TRACE), 'herd-board-trace-frames')  # beside the trace it explains
+	out = f"{folder}/{request}-{what}.png"
+	try:
+		os.makedirs(folder, exist_ok=True)
+		image.save(out)
+		for old in sorted(glob.glob(folder + "/*.png"), key=os.path.getmtime)[:-200]:
+			os.remove(old)
+	except Exception as e:  # evidence only: never let it stop the request
+		return f'unsaved: {type(e).__name__}'
+	return out
+
+
+def clear_pending(path, job, reason, state='failed'):
+	"""Drop the page's pending request, keeping its id for the tablet's status poll. A late model reply or callback for
+	it then fails its binding (the job is no longer the page's pending one), so nothing it made reaches the page."""
+	with pending_lock:
+		if pend('').get(path) != job:
+			return
+		pend(path)
+		ready.pop(path, None)
+		lesson_imports.pop(path, None)
+		answers[path] = state
+		reply_errors[path] = reason
+		trace.event('cleared', state, request=job[4], path=path, reason=reason)
+
+
+def check_replaceable(path, job):
+	"""May a new Respond on this page replace the model request still pending there? The new one cancels the old
+	one up front (once its own capture succeeds), rather than the old one's work being thrown away at the end.
+	Refused, with a reason the tablet shows: a reply being written now, and an older kind of request. A reply that
+	may be partly written is cleared but refused once, so its owner looks at the page before asking again.
+	Caller holds pending_lock."""
+	if not isinstance(job, list) or len(job) < 7 or delivery_options(job).get('model_transport') != 'pi-socket-v1':
+		raise ValueError('A notebook request is already pending on this page')
+	state = answers.get(path)
+	if state == 'writing' and time.time() - job[2] < 2 * NOTEBOOK_PENDING_LIMIT:
+		raise ValueError('A notebook request is already pending on this page')
+	try:
+		with native_ink_runs.lock:
+			native_ink_runs.require_unprepared(job[4])
+		started = state == 'writing' or not native_retry_safe(job)
+	except (ValueError, OSError):
+		started = True
+	if started:
+		clear_pending(path, job, 'Tablet stopped while inserting this reply; inspect the page before retrying')
+		raise ValueError('Tablet stopped while inserting this reply; inspect the page before retrying')
+
+
+def sweep_pending():
+	"""Clear model requests that have sat pending too long; each one is logged with why."""
+	with pending_lock:
+		for path, job in list(pend('').items()):
+			if not isinstance(job, list) or len(job) < 7 or delivery_options(job).get('model_transport') != 'pi-socket-v1':
+				continue
+			age, state = time.time() - job[2], answers.get(path)
+			if state == 'writing' and age > 2 * NOTEBOOK_PENDING_LIMIT:
+				clear_pending(path, job, 'Tablet stopped while inserting this reply; inspect the page before retrying')
+			elif state != 'writing' and age > NOTEBOOK_PENDING_LIMIT:
+				clear_pending(path, job, f'Timed out after {round(age)} s while {state}', state='no answer')
+
+
+def expire_pending():
+	while True:
+		time.sleep(30)
+		try:
+			sweep_pending()
+		except Exception as e:
+			print(time.strftime('%T'), 'pending sweep:', type(e).__name__, e, file=sys.stderr, flush=True)
+
+
+def model_request_replaceable(job, supersedes):
+	"""Explicit new question, not permission to replay/acknowledge old output.
+
+	Caller holds pending_lock; the post-capture check also holds the ink lock
+	through new job creation. Old request journals/content stay untouched and
+	late callbacks still fail their current-request binding.
+	"""
+	if not supersedes:
+		return failed_model_replaceable(job)
+	if (not isinstance(job, list) or len(job) < 7 or job[4] != supersedes or
+		delivery_options(job).get('model_transport') != 'pi-socket-v1' or
+		answers.get(job[1]) != 'failed'):
+		return False
+	return failed_model_replaceable(job) or (job[5] is not None and matching_native_attempt(job))
+
+
+def failed_model_replaceable(job):
+	"""A new explicit Respond may replace only a failed, never-prepared model call.
+
+	No timer or restart calls this to resend. Keep the old job until capture and
+	page checks succeed; the new request then atomically replaces it.
+	"""
+	if (not isinstance(job, list) or len(job) < 7 or job[5] is not None or
+		delivery_options(job).get('model_transport') != 'pi-socket-v1' or
+		answers.get(job[1]) != 'failed' or job[1] in ready or
+		job[1] in lesson_imports or not native_retry_safe(job)):
+		return False
+	try:
+		with native_ink_runs.lock:
+			native_ink_runs.require_unprepared(job[4])
+	except (ValueError, OSError):
+		return False
+	return True
+
+
+def native_retry_safe(job):
+	if not job or len(job) < 7 or job[6] is not True:
+		return False
+	try:
+		with open(live_baseline(job[1]) + ".native-attempt") as stream:
+			attempt = stream.read(200).strip()
+		return bool(re.fullmatch(r"notebook-[0-9a-f]{32}", attempt)) and attempt != job[4]
+	except FileNotFoundError:
+		return True
+	except OSError:
+		return False
+
+
+def retry_notebook_response(request):
+	"""Explicitly re-arm only a current, renderable, never-inserted held reply."""
+	with pending_lock, native_ink_runs.lock:
+		held = held_notebook_response(request)
+		job = notebook_jobs[request]
+		if answers.get(job[1]) not in ("ready", "revision-held") or not native_retry_safe(job):
+			raise ValueError("insertion may already have started; inspect before retrying")
+		from notebook_media import notebook_content
+		if semantic_delivery(job):
+			if not lesson_enabled(job[1].split('/')[0]):
+				raise ValueError('native semantic replies are not enabled for this notebook')
+			parse_semantic_reply(held['text'])
+		elif has_lesson(held['text']):
+			from notebook_lesson import parse_lesson
+			if not lesson_enabled(job[1].split('/')[0]):
+				raise ValueError('native lessons are not enabled for this notebook')
+			parse_lesson(held['text'])  # complete validation, no source provisioning
+		else:
+			catalog = load_catalog(INK_CATALOG) if '[[notebook-ink:' in held['text'] else None
+			notebook_content(held["text"], media_store, catalog)  # full formatting preflight, no tablet write
+		if answers.get(job[1]) == 'revision-held':
+			if not revision_pending(job) or pend('').get(job[1]) != job:
+				raise ValueError('pending revision has changed')
+			if time.time() - job[2] >= ANSWER_WAIT:
+				raise ValueError('pending revision has expired')
+			if job[1] in lesson_imports:
+				raise ValueError('pending revision has an unexpected import')
+			native_ink_runs.require_unprepared(request)
+			job = with_delivery(job,revision_pending=None)
+			pend(job[1], job)
+			notebook_jobs[request] = job
+			ready[job[1]] = held['text']
+			answers[job[1]] = 'ready'
+		retry_requests[request] = uuid.uuid4().hex
+		return {"state": "ready", "request": request, "page": job[1], "retry_armed": True}
+
+
+def held_notebook_response(request):
+	"""Read one current held reply for formatting diagnosis; never insert/resend."""
+	if not re.fullmatch(r"notebook-[0-9a-f]{32}", request):
+		raise ValueError("exact notebook request ID required")
+	with pending_lock:
+		job = notebook_jobs.get(request)
+		if not job or answer_status(job[1])["request"] != request:
+			raise ValueError("request has no current held reply")
+		if (answers.get(job[1]) == 'revision-held' and revision_pending(job) and
+			pend('').get(job[1]) == job):
+			return {"request": request, "page": job[1], "text": job[5]}
+		if job[1] not in ready:
+			raise ValueError("request has no current held reply")
+		return {"request": request, "page": job[1], "text": ready[job[1]]}
+
+
+def page_index(path):
+	"""Return the notebook page index used by xochitl when reopening a page path."""
+	try:
+		doc, page = path[:-3].split("/")
+		content = json.loads(tablet(f"cat {XOCHITL}/{doc}.content"))
+		pages = sorted((item for item in content["cPages"]["pages"]
+			if not item.get("deleted", {}).get("value")), key=lambda item: item["idx"]["value"])
+		for index, item in enumerate(pages):
+			if item.get("id") == page:
+				return index
+	except Exception:
+		pass
+	return None
+
+
+def add_page(doc, content, like):
+	"""A new last page for notebook doc (its .content), on page like's template: its id. The notebook must be closed."""
+	pages = content["cPages"]["pages"]
+	last = max(g["idx"]["value"] for g in pages)
+	idx = last[:-1] + chr(ord(last[-1]) + 1) if last[-1] < "z" else last + "n"
+	tpl = next((g.get("template") for g in pages if g["id"] == like), None) or {"timestamp": "1:1", "value": "Blank"}
+	new = str(uuid.uuid4())
+	pages.append({"id": new, "idx": {"timestamp": "1:2", "value": idx}, "template": dict(tpl)})
+	content["pageCount"] = content.get("pageCount", 0) + 1
+	tablet(f"cat > {XOCHITL}/{doc}.content.new && mv {XOCHITL}/{doc}.content.new {XOCHITL}/{doc}.content",
+		json.dumps(content, indent=4).encode())
+	return new
+
+
+DRAWING = re.compile(r"```svg\s*(.*?)```", re.S)
+
+
+def compose(text, top, size=36, bottom=1800):
+	"""A desk's answer as pen strokes on the page from top: its words typed after a "> " prompt, and under them its
+	drawing, if it sent one (an ```svg block of lines and curves), drawn to fit what is left of the page."""
+	m = DRAWING.search(text)
+	words = re.sub(r"[`*#_]+", "", DRAWING.sub(" ", text)).strip()
+	lines, h = pen_text("> " + words, 1120, size, max_lines=max(1, int((bottom - top) // (size * 1.5)) - (8 if m else 0)),
+		face=TYPE) if words else ([], 0)
+	out = [[(-580 + x, top + y, 2.0) for x, y in l] for l in lines]
+	if m:
+		try:
+			y0 = top + h + 30
+			art, ah = svg_lines(m.group(1).strip(), 1000, max(200, bottom - y0))
+			out += [[(-500 + x, y0 + y, 2.0) for x, y in l] for l in art]
+		except Exception as e:
+			print(time.strftime("%T"), "drawing not drawn:", e, file=sys.stderr)
+	return out
+
+
+def write_answer(path, text, keep=KEEP):
+	if not re.fullmatch(r"[0-9a-f-]{36}/[0-9a-f-]{36}\.rm", path):
+		raise ValueError("not a notebook page")
+	first, end = None, time.time() + keep
+	while first is None or time.time() < end:
+		data = tablet(f"cat {XOCHITL}/{path}")
+		ss = strokes(data)
+		if first and any(p and abs(p[0][0] - first[0]) < 0.01 and abs(p[0][1] - first[1]) < 0.01 for _, p, _ in ss):
+			time.sleep(60)   # still there
+			continue
+		top = max([y for _, p, _ in ss for _, y, _ in p] or [60]) + 90
+		size = 36
+		room = int((1800 - top) // (size * 1.5))
+		if room < 3 or (DRAWING.search(text) and 1800 - top < 600):   # onto the next page, a fresh one if it has nothing on it yet
+			doc, page = path[:-3].split("/")
+			content = json.loads(tablet(f"cat {XOCHITL}/{doc}.content"))
+			order = [g["id"] for g in content["cPages"]["pages"] if not g.get("deleted", {}).get("value")]
+			after = order[order.index(page) + 1:] if page in order else []
+			if not after:   # the notebook's last page: a new one after it, on the same template
+				after = [add_page(doc, content, page)]
+			nxt = f"{doc}/{after[0]}.rm"
+			if not strokes(tablet(f"cat {XOCHITL}/{nxt} 2>/dev/null")):
+				fresh, start = blank(data)
+				lines = compose(text, 150)
+				tablet(f"cat > {XOCHITL}/{nxt}.new && mv {XOCHITL}/{nxt}.new {XOCHITL}/{nxt}", append(fresh, lines, start))
+				answers[path] = answers[nxt] = "written"
+				print(time.strftime("%T"), "answer written on a fresh page", nxt, len(lines), "strokes", file=sys.stderr)
+				return nxt
+			return write_answer(nxt, text, keep)
+		lines = compose(text, top)
+		first = lines[0][0][:2]
+		tablet(f"cat > {XOCHITL}/{path}.new && mv {XOCHITL}/{path}.new {XOCHITL}/{path}", append(data, lines))
+		answers[path] = "written"
+		print(time.strftime("%T"), "answer written", path, len(lines), "strokes", file=sys.stderr)
+		if keep:
+			time.sleep(60)
+	return path
+
+
+# --- correspondence: one desk's conversation, for the tablet
+
+threads = {}   # transcript path -> ((mtime, size), items)
+
+
+def para(t):
+	"""clean(), keeping the paragraphs: the tablet shows a reply as it was written."""
+	t = re.sub(r"<([a-z-]+)[^>]*>.*?</\1>", " ", t, flags=re.S).replace("**", "").replace("`", "")
+	lines = (" ".join(re.sub(r"^\s*#+\s*", "", l).split()) for l in t.splitlines())
+	return "\n".join(l for l in lines if l)
+
+
+def turns(sid):
+	"""The last THREAD turns of session sid: each thing the owner said, and the last thing the agent wrote after it."""
+	path = transcript(sid)
+	if not path:
+		return []
+	key = (os.path.getmtime(path), os.path.getsize(path))
+	if threads.get(path, (None,))[0] == key:
+		return threads[path][1]
+	with open(path, "rb") as f:
+		f.seek(max(0, key[1] - 3_000_000))
+		lines = f.read().splitlines()
+	items = []
+	for line in lines:
+		if b'"timestamp"' not in line or (b'"type":"user"' not in line and b'"type":"assistant"' not in line):
+			continue
+		try:
+			e = json.loads(line)
+			t = int(datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp())
+		except (ValueError, KeyError):
+			continue
+		if e.get("type") not in ("user", "assistant") or e.get("isMeta") or e.get("isCompactSummary"):
+			continue
+		raw = text_of(e.get("message", {}).get("content", ""))
+		text = para(raw)
+		art = re.search(r"<svg\b.*?</svg>", raw, re.S) if e["type"] == "assistant" else None
+		if not text or text.startswith(("[Request interrupted", "This session is being continued")):
+			continue
+		who = "you" if e["type"] == "user" else "agent"
+		if who == "agent" and items and items[-1]["who"] == "agent":
+			items.pop()   # a turn's narration on the way: only its last word stands
+		items.append({"who": who, "text": text if len(text) <= REPLY else text[:REPLY].rsplit(" ", 1)[0] + "…", "at": t})
+		if art:
+			items[-1]["svg"] = art.group(0)
+	starts = [i for i, it in enumerate(items) if it["who"] == "you"]
+	items = items[starts[-THREAD]:] if len(starts) >= THREAD else items
+	threads[path] = (key, items)
+	return items
+
+
+def thread(pane):
+	desks, me = [], None
+	for a in agent_list():
+		d = {"name": a.get("name") or a.get("agent", "?"), "pane": a.get("pane_id"), "status": a.get("agent_status", "?")}
+		desks.append(d)
+		if d["pane"] == pane:
+			s = a.get("agent_session") or {}
+			me = dict(d, runtime=a.get("agent"), session=s,
+				sid=s["value"] if a.get("agent") == "claude" and s.get("kind") == "id" else None)
+	desks.sort(key=lambda d: (ORDER.get(d["status"], 4), d["name"]))
+	if me and me["sid"]:
+		items = turns(me["sid"])
+	elif me:   # no transcript to read (not Claude Code): what was written to it from here
+		items = [{"who": "you", "text": l["text"], "at": l["at"]} for l in letters if l["name"] == me["name"]][-THREAD:]
+	else:
+		items = []
+	out = {"desks": desks, "name": me["name"] if me else "", "status": me["status"] if me else "", "items": items}
+	if me:
+		out.update(runtime=me["runtime"], session=me["session"])
+	out["v"] = hashlib.sha1(json.dumps(out).encode()).hexdigest()[:12]
+	return out
+
+
+# --- the walk edition: a voice session on the R1, from herd-voice's trace and the agents' transcripts
+
+def walk_list():
+	"""The last WALKS walks, newest first: runs of what the R1 was told with no WALK_GAP of quiet."""
+	runs = []
+	for path in (TRACE + ".1", TRACE):
+		try:
+			lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+		except OSError:
+			continue
+		for line in lines:
+			m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (say|progress|cue) (.*)", line)
+			if not m:
+				continue
+			t = datetime.strptime(m[1], "%Y-%m-%d %H:%M:%S").timestamp()
+			if not runs or t - runs[-1]["end"] > WALK_GAP:
+				runs.append({"start": t, "end": t, "told": []})
+			runs[-1]["end"] = t
+			if m[2] == "say" or not runs[-1]["told"] or runs[-1]["told"][-1][2] != m[3]:
+				runs[-1]["told"].append((t, m[2], m[3].strip()))
+	return [r for r in reversed(runs) if len(r["told"]) >= 2][:WALKS]
+
+
+def asked(start, end):
+	"""What the owner said to each Claude agent between start and end (on a walk: by voice), from its transcript."""
+	out = []
+	for a in agent_list():
+		s = a.get("agent_session") or {}
+		path = transcript(s["value"]) if a.get("agent") == "claude" and s.get("kind") == "id" else None
+		if not path or os.path.getmtime(path) < start:
+			continue
+		with open(path, "rb") as f:
+			f.seek(max(0, os.path.getsize(path) - 3_000_000))
+			for line in f:
+				if b'"type":"user"' not in line or b'"timestamp"' not in line:
+					continue
+				try:
+					e = json.loads(line)
+					t = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+				except (ValueError, KeyError):
+					continue
+				text = clean(text_of(e.get("message", {}).get("content", "")))
+				if start - 60 <= t <= end and text and not text.startswith("[Request interrupted"):
+					out.append((t, a.get("name") or a.get("agent", "?"), short(text, 400)))
+	return sorted(out)
+
+
+def write_walk(w):
+	old = walks.get(int(w["start"]))
+	live = time.time() - w["end"] < WALK_GAP
+	if held() or (old and (len(w["told"]) == old["n"] or not live or time.time() - old["t"] < WRITE)):
+		return False
+	if time.time() - tried.get(("walk", int(w["start"])), 0) < WRITE:
+		return False
+	tried[("walk", int(w["start"]))] = time.time()
+	log = [(t, f"James to {name}: {x}") for t, name, x in asked(w["start"], w["end"])]
+	log += [(t, f"read back: {x}" if kind == "say" else f"(while it worked) {x}") for t, kind, x in w["told"]]
+	text = "\n".join(f"{datetime.fromtimestamp(t):%H:%M} {x}" for t, x in sorted(log))
+	e = gemini(WALK_SYS, f"The walk: {datetime.fromtimestamp(w['start']):%A %d %B, %H:%M} to "
+		f"{datetime.fromtimestamp(w['end']):%H:%M}\n\nLog:\n{text[-LOG:]}")
+	walks[int(w["start"])] = {"headline": str(e.get("headline", "")), "lede": str(e.get("lede", "")),
+		"decisions": [str(d) for d in e.get("decisions", [])][:5], "n": len(w["told"]), "t": time.time()}
+	with open(f"{CACHE}/walks.json", "w") as f:
+		json.dump({str(k): v for k, v in walks.items()}, f)
+	return True
+
+
+def walk_json():
+	out = []
+	for w in walk_list():
+		e = walks.get(int(w["start"]))
+		said_back = [x for t, kind, x in w["told"] if kind == "say"]
+		out.append({"start": int(w["start"]), "end": int(w["end"]), "said": len(said_back),
+			"live": time.time() - w["end"] < WALK_GAP,
+			"asked": [{"at": int(t), "to": n, "text": x} for t, n, x in asked(w["start"], w["end"])][-8:],
+			"told": [short(x, 300) for x in said_back][-8:],
+			"edition": {k: e[k] for k in ("headline", "lede", "decisions")} if e else None})
+	return {"walks": out, "tz": tz()}
+
+
+# --- the R1's instruments, and this host's Gemini ledger
+
+R1_READ = r"""b=/sys/class/power_supply/battery
+echo "cap=$(cat $b/capacity)"; echo "state=$(cat $b/status)"; echo "mv=$(( $(cat $b/voltage_now) / 1000 ))"
+echo "ma=$(( $(cat $b/current_now 2>/dev/null || echo 0) / 1000 ))"
+[ -f /run/r1-net ] && { echo "netage=$(( $(date +%s) - $(stat -c %Y /run/r1-net) ))"; grep -E '^(lte|dbm)=' /run/r1-net; }
+echo "wifi=$(cat /sys/class/net/wlan0/operstate 2>/dev/null)"; awk 'NR==3{print "wdbm=" int($4)}' /proc/net/wireless
+ls /sys/class/bluetooth | grep -q : && echo bt=1 || echo bt=0
+ip -4 addr show tailscale0 2>/dev/null | grep -q inet && echo ts=1 || echo ts=0
+echo "up=$(cut -d. -f1 /proc/uptime)"; echo "load=$(cut -d' ' -f1 /proc/loadavg)"
+"""
+
+
+def r1_state():
+	"""The R1's battery and links, read over ssh at most every R1_EVERY seconds: numbers and states only, no
+	identifiers (from r1-net, only lte and dbm)."""
+	if time.time() - r1["t"] < R1_EVERY:
+		return r1["s"]
+	r1["t"] = time.time()
+	try:
+		r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", R1, "sh"], input=R1_READ,
+			capture_output=True, text=True, timeout=15, env={**os.environ, "SSH_AUTH_SOCK": R1_SOCK})
+		kv = dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+	except (OSError, subprocess.SubprocessError):
+		kv = {}
+	num = lambda k: int(kv[k]) if re.fullmatch(r"-?\d+", kv.get(k, "")) else None
+	if not kv:
+		r1["s"] = {"online": False, "seen": r1["s"].get("seen")}
+		return r1["s"]
+	w = num("wdbm")
+	lte = kv.get("lte", "off") if (num("netage") or 999) < 90 else "off"
+	r1["s"] = {"online": True, "seen": int(time.time()), "battery": num("cap"), "charging": kv.get("state") == "Charging",
+		"state": kv.get("state", ""), "mv": num("mv"), "ma": num("ma"), "lte": lte, "lte_dbm": num("dbm"),
+		"wifi": kv.get("wifi") == "up", "wifi_dbm": (w - 256 if w and w > 63 else w), "bt": kv.get("bt") == "1",
+		"tailscale": kv.get("ts") == "1", "uptime": num("up"), "load": kv.get("load")}
+	return r1["s"]
+
+
+def gemini_today():
+	day, callers, n429 = time.strftime("%Y-%m-%d"), {}, 0
+	try:
+		for line in open(f"{GEMINI}/calls.log", encoding="utf-8", errors="replace"):
+			f = line.split()
+			if len(f) < 5 or f[0] != day:
+				continue
+			who = f[2].split(":")[0]
+			c = callers.setdefault(who, {"calls": 0, "tokens": 0})
+			c["calls"] += 1
+			c["tokens"] += sum(int(x.split("=")[1]) for x in f if re.fullmatch(r"(in|out|think)=\d+", x))
+			n429 += f[4] == "429"
+	except OSError:
+		pass
+	try:
+		hold = max(0, int(float(open(f"{GEMINI}/hold-until").read()) - time.time()))
+	except (OSError, ValueError):
+		hold = 0
+	return {"callers": callers, "limited": n429, "hold": hold}
+
+
+# --- field dispatches: the R1 recorder's notes
+
+def dispatch_list():
+	out = []
+	for path in sorted(glob.glob(f"{RECORDINGS}/*.md"), reverse=True)[:12]:
+		try:
+			t = open(path, encoding="utf-8", errors="replace").read()
+		except OSError:
+			continue
+		title = re.search(r"^# (.+)$", t, re.M)
+		meta = re.search(r"^\*(.+)\*$", t, re.M)
+		summary = re.search(r"## Summary\s*\n(.*?)(?:\n## |\Z)", t, re.S)
+		body = re.search(r"## Transcript\s*\n(.*)", t, re.S)
+		out.append({"file": os.path.basename(path), "title": title[1].strip() if title else os.path.basename(path),
+			"meta": meta[1].strip() if meta else "",
+			"summary": " ".join(l.lstrip("- ").strip() for l in (summary[1] if summary else "").splitlines() if l.strip()),
+			"transcript": short(" ".join((body[1] if body else "").split()), 1500)})
+	return out
+
+
+def hand(pane, file):
+	"""A dispatch to a desk: its title and summary into the agent's pane, with where the full note is."""
+	d = next((d for d in dispatch_list() if d["file"] == file), None)
+	if not d:
+		raise ValueError("no such dispatch")
+	return send(pane, f"A field dispatch recorded on the R1, for you to act on: {d['title']}. {d['summary']} "
+		f"The full note and transcript: {RECORDINGS}/{file}")
+
+
+
+def strike(file):
+	"""A dispatch struck out on the tablet: its note and recording into RECORDINGS/.deleted, not gone, in case the
+	cross was a slip."""
+	if file not in {d["file"] for d in dispatch_list()}:
+		raise ValueError("no such dispatch")
+	os.makedirs(f"{RECORDINGS}/.deleted", exist_ok=True)
+	stem = file[:-len(".md")]
+	for path in glob.glob(f"{RECORDINGS}/{glob.escape(stem)}.*"):
+		os.replace(path, f"{RECORDINGS}/.deleted/{os.path.basename(path)}")
+	return file
+
+class Handler(BaseHTTPRequestHandler):
+	def notebook_authorized(self, method, path):
+		if not protected_route(path):
+			return True
+		status = notebook_auth.rejection(method, path, self.headers) if notebook_auth else 503
+		if status is None:
+			return True
+		print(f"{time.strftime('%H:%M:%S')} {method} {path}: refused {status}", file=sys.stderr, flush=True)
+		self.reply(status, {"error": "Notebook caller not authorized"})
+		return False
+
+	def reply(self, code, obj):
+		body = json.dumps(obj).encode()
+		self.send_response(code)
+		self.send_header("Content-Type", "application/json")
+		self.send_header("Content-Length", str(len(body)))
+		self.end_headers()
+		self.wfile.write(body)
+
+	def do_GET(self):
+		path, _, query = self.path.partition("?")
+		if not self.notebook_authorized("GET", path):
+			return
+		try:
+			if path == "/notebook-device-context":
+				self.reply(200, device_context.snapshot())
+			elif path == "/notebook-native-probe":
+				self.reply(200, native_probe.snapshot())
+			elif path == "/notebook-status":
+				self.reply(200, {"jobs": [{"request": marker, "page": job[1],
+					"state": answers.get(job[1], "unknown"), "error": reply_errors.get(job[1]),
+					"source_found": marker in reply_reader.sources, "timing_ms": timing_status(job[1])}
+					for marker, job in list(notebook_jobs.items())],
+					"transcript_roots": reply_reader.inventory()})
+			elif path == "/answer":
+				pg = urllib.parse.parse_qs(query).get("page", [""])[0]
+				self.reply(200, answer_status(pg))
+			elif path == "/notebook-response":
+				request = urllib.parse.parse_qs(query).get("request", [""])[0]
+				self.reply(200, held_notebook_response(request))
+			elif path == "/herd.json":
+				since = dict(q.split("=", 1) for q in query.split("&") if "=" in q).get("since")
+				h, end = herd(), time.time() + HOLD
+				while since and h["v"] == since and time.time() < end:
+					time.sleep(POLL)
+					h = herd()
+				for a in h["agents"]:
+					a.pop("sid")
+				self.reply(200, h)
+			elif path == "/thread.json":
+				q = dict(urllib.parse.parse_qsl(query))
+				t, end = thread(q.get("pane", "")), time.time() + HOLD
+				while q.get("since") and t["v"] == q["since"] and time.time() < end:
+					time.sleep(POLL)
+					t = thread(q.get("pane", ""))
+				self.reply(200, t)
+			elif path == "/walk.json":
+				self.reply(200, walk_json())
+			elif path == "/r1.json":
+				self.reply(200, {"r1": r1_state(), "gemini": gemini_today(), "at": int(time.time()), "tz": tz()})
+			elif path == "/dispatches.json":
+				self.reply(200, {"dispatches": dispatch_list(),
+					"desks": [{"name": a.get("name") or a.get("agent", "?"), "pane": a.get("pane_id")} for a in agent_list()]})
+			else:
+				self.send_error(404)
+		except Exception as e:
+			self.reply(500, {"error": str(e)})
+
+	def do_POST(self):
+		"""POST /read {"pane"} (its notebook's latest page) or {"png": base64 or a data: URL} -> {"text"}; /send {"pane", "text"} and /hand {"pane", "file"}
+		-> {"to": the desk's name}; /strike {"file"}
+		-> {"struck"}: a dispatch into RECORDINGS/.deleted; /restart: exit, and launchd starts the server again."""
+		if not self.notebook_authorized("POST", self.path.partition("?")[0]):
+			return  # Authenticate before reading a body or invoking any side effect.
+		try:
+			n = int(self.headers.get("Content-Length", 0))
+			if n > 4_000_000:
+				raise ValueError("too large")
+			q = json.loads(self.rfile.read(n) or b"{}")
+			traced = self.path in TRACED_POSTS and isinstance(q, dict)
+			if self.path == "/notebook-test":
+				self.reply(200, arm_notebook_test(q))
+			elif self.path == "/read" and q.get("pane"):
+				self.reply(200, {"text": read_page(str(q["pane"]))})
+			elif self.path == "/read":
+				png = str(q.get("png", "")).split(",", 1)[-1]
+				base64.b64decode(png, validate=True)
+				self.reply(200, {"text": read_letter(png)})
+			elif self.path == "/notebook-reply":
+				self.reply(200, notebook_reply(str(q.get("request", "")), q.get("text")))
+			elif self.path == "/notebook-primer-prestart":
+				self.reply(200, primer_prestart(q))
+			elif self.path == "/notebook-retry":
+				self.reply(200, retry_notebook_response(str(q.get("request", ""))))
+			elif self.path == "/notebook-revise":
+				self.reply(200, revise_notebook_response(str(q.get("request", "")), q.get("expected_sha256"), q.get("text")))
+			elif self.path == "/notebook-media":
+				if "equation" in q:
+					asset = media_store.equation(q["equation"])
+				else:
+					data = base64.b64decode(str(q.get("png", "")), validate=True)
+					asset = media_store.put(data, str(q.get("kind", "photo")))
+				self.reply(200, asset)
+			elif self.path == "/notebook-media-test":
+				doc, page, asset = str(q.get("doc", "")), str(q.get("page", "")), str(q.get("asset", ""))
+				if not re.fullmatch(r"[0-9a-f-]{36}", doc) or not re.fullmatch(r"[0-9a-f-]{36}", page):
+					raise ValueError("media test requires notebook and page UUIDs")
+				media_store.get(asset)  # validates ID and local image integrity
+				with pending_lock:
+					media_tests[f"{doc}/{page}.rm"] = {"asset": asset, "expires": time.time() + 300}
+				self.reply(200, {"armed": True, "expires_in": 300})
+			elif self.path == "/write":
+				self.reply(200, write_ready(str(q.get("page", ""))))
+			elif self.path == "/write-live":
+				self.reply(200, write_live(str(q.get("page", ""))))
+			elif self.path == "/native-context":
+				self.reply(200, native_context_report(q))
+			elif self.path == "/notebook-keep-awake":
+				self.reply(200, device_context.keep_awake(q))
+			elif self.path == "/notebook-audit-view":
+				self.reply(200, arm_view_audit(q))
+			elif self.path == "/notebook-native-probe":
+				self.reply(200, arm_native_probe(q))
+			elif self.path == "/native-probe-claim":
+				self.reply(200, claim_native_probe(q))
+			elif self.path == "/native-probe-result":
+				self.reply(200, complete_native_probe(q))
+			elif self.path == "/native-text":
+				self.reply(200, native_text(str(q.get("page", "")), ink_supported=type(q.get("ink_version")) is int and q["ink_version"] == 1, imported=q.get('imported'), import_supported=type(q.get('lesson_version')) is int and q['lesson_version'] == 1,
+					preservation_supported=type(q.get('preservation_version')) is int and q['preservation_version'] == 1, layout=q.get('layout'),
+					reveal_supported=type(q.get('reveal_version')) is int and q['reveal_version'] == 1,
+					playback_supported=type(q.get('playback_version')) is int and q['playback_version'] == 1,
+					pen_equations_supported=type(q.get('pen_equations_version')) is int and q['pen_equations_version'] == 1,
+					story_supported=type(q.get('story_version')) is int and q['story_version'] == 1,
+					hand_supported=type(q.get('hand_version')) is int and q['hand_version'] == 1))
+			elif self.path == "/native-ink-claim":
+				self.reply(200, claim_native_ink(q))
+			elif self.path == "/native-ink-done":
+				self.reply(200, complete_native_ink(q))
+			elif self.path == "/notebook-ink-proof":
+				self.reply(200, native_ink_proof(str(q.get("request", "")), q.get('layout')))
+			elif self.path == "/native-text-done":
+				self.reply(200, native_text(str(q.get("page", "")), str(q.get("request", "")), done=True))
+			elif self.path == "/native-text-failed":
+				self.reply(200, native_text_failed(str(q.get("page", "")), str(q.get("request", ""))))
+			elif self.path == "/notebook-media-proof":
+				self.reply(200, native_media_proof(str(q.get("page", "")), str(q.get("request", "")), q.get("assets")))
+			elif self.path == "/respond":
+				self.reply(200, respond(str(q.get("doc", "")), str(q.get("page", "")), q.get("live") is True, q.get("supersedes", ""),
+					stream_supported=type(q.get('answer_stream_version')) is int and q['answer_stream_version'] == 1))
+			elif self.path == "/notebook-answer-stream":
+				self.reply(200, notebook_answer_stream(q))
+			elif self.path == "/send":
+				self.reply(200, {"to": post_letter(str(q.get("pane", "")), str(q.get("text", "")))})
+			elif self.path == "/hand":
+				self.reply(200, {"to": hand(str(q.get("pane", "")), str(q.get("file", "")))})
+			elif self.path == "/strike":
+				self.reply(200, {"struck": strike(str(q.get("file", "")))})
+			elif self.path == "/restart":   # launchd (KeepAlive) starts it again, with its code as it is now
+				self.reply(200, {"restarting": True})
+				print(f"{time.strftime('%H:%M:%S')} restart asked for", file=sys.stderr, flush=True)
+				threading.Timer(0.5, os._exit, (0,)).start()
+			else:
+				self.send_error(404)
+		except Exception as e:
+			if traced:
+				trace.event(TRACED_POSTS[self.path], 'failed', request=str(q.get('request') or '') or None,
+					path=str(q.get('page') or '') or None, reason=f'{type(e).__name__}: {e}')
+			print(f"{time.strftime('%H:%M:%S')} POST {self.path}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+			self.reply(400 if isinstance(e, ValueError) else 500, {"error": str(e)})
+
+	def log_message(self, *a):
+		pass
+
+
+# The native endpoints the tablet calls after a Respond, and the stage each one is: a failure there is traced.
+TRACED_POSTS = {'/native-text': 'placed', '/native-text-done': 'acknowledged', '/native-text-failed': 'written',
+	'/native-ink-claim': 'written', '/native-ink-done': 'written', '/notebook-ink-proof': 'written',
+	'/notebook-media-proof': 'written', '/write-live': 'written'}
+
+
+if __name__ == "__main__":
+	host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
+	port = int(sys.argv[2]) if len(sys.argv) > 2 else 8791
+	os.makedirs(CACHE, exist_ok=True)
+	sys.stderr = trace.Dated(sys.stderr)
+	notebook_auth = NotebookAuth(load_credentials(create=True))
+	try:
+		lesson_rollout_config()  # sets the label hand before any held reply is prepared again
+	except ValueError:
+		pass
+	resume()
+	try:
+		sections.update({(k0, k1): v for k0, k1, v in json.load(open(f"{CACHE}/sections.json"))})
+	except (OSError, ValueError):
+		pass
+	try:
+		letters.extend(json.load(open(f"{CACHE}/letters.json")))
+	except (OSError, ValueError):
+		pass
+	try:
+		walks.update({int(k): v for k, v in json.load(open(f"{CACHE}/walks.json")).items()})
+	except (OSError, ValueError):
+		pass
+	threading.Thread(target=writer, daemon=True).start()
+	threading.Thread(target=expire_pending, daemon=True).start()
+	ThreadingHTTPServer((host, port), Handler).serve_forever()

@@ -1,0 +1,1402 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Story model comparison</title>
+<style>body{font:18px/1.5 sans-serif;max-width:1500px;margin:2rem auto;padding:1rem}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.model{border:1px solid #aaa;padding:1rem}img{width:100%;height:auto}
+.warn{background:#fff2cd;padding:.6rem}pre{white-space:pre-wrap}figure{margin:1rem 0}</style>
+<h1>Identical questions, independent story/panel responses</h1>
+<p>Offline only. Geometry acceptance is not teaching-quality approval. No handwriting recognition, tablet latency or native delivery is proven. Host prompt installation must be verified separately.</p>
+<h2>Explain the definite integral of x squared from 0 to 1 using an area picture and compute it.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 13273 ms; 3 call attempts.</p>
+<p class="warn">Held at panel:shaded-area: missing or unknown drawing fields</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-acb5e86e871e4bbaa6830b7cd481ef6c&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4590,
+      &quot;first_text_ms&quot;: 1959,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2371,
+        &quot;output&quot;: 511,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4603
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-de6b07f1e47d4845b5a21f04f4107659&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3297,
+      &quot;first_text_ms&quot;: 2907,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2696,
+        &quot;output&quot;: 329,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3303
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-405b5205a93f41dbb6631e0fbff6b240&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 5298,
+      &quot;first_text_ms&quot;: 4217,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2895,
+        &quot;output&quot;: 604,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 5304
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 36925 ms; 5 call attempts.</p>
+<figure><img src="1-integral-panel-curve.png" alt="The integral measures area beneath this curve, above the x-axis."><figcaption>The integral measures area beneath this curve, above the x-axis.</figcaption></figure>
+<figure><img src="1-integral-panel-rectangles.png" alt="Rectangle areas approximate the integral; these rectangles underestimate it."><figcaption>Rectangle areas approximate the integral; these rectangles underestimate it.</figcaption></figure>
+<figure><img src="1-integral-panel-refine.png" alt="Narrower rectangles reduce gaps; their sums converge to the area."><figcaption>Narrower rectangles reduce gaps; their sums converge to the area.</figcaption></figure>
+<figure><img src="1-integral-panel-exact.png" alt="An antiderivative is x³/3; endpoint subtraction gives 1/3 − 0."><figcaption>An antiderivative is x³/3; endpoint subtraction gives 1/3 − 0.</figcaption></figure>
+<p><strong>Takeaway:</strong> ∫₀¹ x² dx = [x³/3]₀¹ = 1/3 square unit. Rectangles illustrate the limiting area; the antiderivative computes it exactly.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-666a8ffaf0ef4ecfac6649673028c1f6&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 15989,
+      &quot;first_text_ms&quot;: 2693,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2371,
+        &quot;output&quot;: 490,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 16007
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-86ca4e68daec4467bdb24d0281e2a1aa&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 5013,
+      &quot;first_text_ms&quot;: 2717,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2784,
+        &quot;output&quot;: 196,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 5019
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-03f317a5945346a999e52ee3bef6dac7&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4606,
+      &quot;first_text_ms&quot;: 1951,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3041,
+        &quot;output&quot;: 210,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4618
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-f3fcc4e394644f1098284aeeeb858bde&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 7733,
+      &quot;first_text_ms&quot;: 3289,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3047,
+        &quot;output&quot;: 330,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 7736
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-503cea67616448f2af18fa873c5bc38f&quot;,
+    &quot;file&quot;: &quot;call-04-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3024,
+      &quot;first_text_ms&quot;: 2462,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3061,
+        &quot;output&quot;: 51,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3030
+  }
+]</pre></details></section>
+</div>
+<h2>Why does an apple dropped from rest fall farther in each equal time interval? Ignore air resistance.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 4685 ms; 1 call attempts.</p>
+<p class="warn">Held at story: missing or unknown drawing fields</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-21ceb336767141d59eb9c9289c1af5a6&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4674,
+      &quot;first_text_ms&quot;: 2220,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2369,
+        &quot;output&quot;: 497,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4680
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 47451 ms; 5 call attempts.</p>
+<p class="warn">Held at panel:pattern: label placement search budget exceeded</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-884d411bd13c4c33ba3f4d3577c605dd&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 19542,
+      &quot;first_text_ms&quot;: 2450,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2369,
+        &quot;output&quot;: 458,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 19550
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-ac824ee04945428fa1d34b519a3cdffd&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4641,
+      &quot;first_text_ms&quot;: 2576,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2748,
+        &quot;output&quot;: 130,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4647
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-adb51122dfc74b01bd7dc98bbf7c69e0&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 9478,
+      &quot;first_text_ms&quot;: 5816,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2935,
+        &quot;output&quot;: 415,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 9486
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-d31868c802dc47d89acf79b9f22f8e0d&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6920,
+      &quot;first_text_ms&quot;: 2277,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3382,
+        &quot;output&quot;: 332,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6923
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-a66287a5c8804e3e96770f5249738ff9&quot;,
+    &quot;file&quot;: &quot;call-04-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6461,
+      &quot;first_text_ms&quot;: 1927,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3782,
+        &quot;output&quot;: 381,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6468
+  }
+]</pre></details></section>
+</div>
+<h2>Show why the sum of the first n odd numbers equals n squared, not just a few numerical examples.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 5327 ms; 1 call attempts.</p>
+<p class="warn">Held at story: panel caption exceeds twelve whitespace-delimited words</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-a03fb6e5907940b394ed4826a2c43063&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 5306,
+      &quot;first_text_ms&quot;: 2504,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2371,
+        &quot;output&quot;: 616,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 5317
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 47198 ms; 5 call attempts.</p>
+<p class="warn">Held at panel:layers: unsupported diagram-label glyph</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-7b7b2b5082d147a7938c28b0a59653af&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 23009,
+      &quot;first_text_ms&quot;: 3055,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2371,
+        &quot;output&quot;: 564,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 23017
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-782e900096bf4142abf2cf100e4ffc9e&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4178,
+      &quot;first_text_ms&quot;: 2721,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2793,
+        &quot;output&quot;: 147,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4184
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-1e3656a1afae4162871a373c1c33d6dc&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3757,
+      &quot;first_text_ms&quot;: 2254,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3000,
+        &quot;output&quot;: 100,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3761
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-bb98729894364baa8ef01324281c7d89&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3803,
+      &quot;first_text_ms&quot;: 2736,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3184,
+        &quot;output&quot;: 98,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3810
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-495b0cc5adb440819bd2101925a25fcd&quot;,
+    &quot;file&quot;: &quot;call-04-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 12158,
+      &quot;first_text_ms&quot;: 9271,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2735,
+        &quot;output&quot;: 444,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 12167
+  }
+]</pre></details></section>
+</div>
+<h2>Compare $100 growing at 10% per year with $100 gaining $10 per year over three years.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 11370 ms; 3 call attempts.</p>
+<p class="warn">Held at panel:paths: no joint clear label placement; simplify the scene</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-5b8858b1c12b49c0a1cf5a33e6373bdd&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6366,
+      &quot;first_text_ms&quot;: 3802,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2372,
+        &quot;output&quot;: 668,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6371
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-62ba9bf32f014e6e9e497889963a43f2&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2494,
+      &quot;first_text_ms&quot;: 2349,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2701,
+        &quot;output&quot;: 191,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2502
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-f872dda2395646de97379ac35791075e&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2355,
+      &quot;first_text_ms&quot;: 1941,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2839,
+        &quot;output&quot;: 232,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2358
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 28746 ms; 4 call attempts.</p>
+<p class="warn">Held at panel:year-two: label placement search budget exceeded</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-24f91b41669b4510b48bcd5601847249&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 15301,
+      &quot;first_text_ms&quot;: 2415,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2372,
+        &quot;output&quot;: 455,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 15307
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-ecf6366f6c644795994a6492eb4292a7&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4757,
+      &quot;first_text_ms&quot;: 2190,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2767,
+        &quot;output&quot;: 143,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4762
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-ce0b8688dfbe45b9b39ac2523ca2c7e8&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3697,
+      &quot;first_text_ms&quot;: 2449,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2970,
+        &quot;output&quot;: 104,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3700
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-b0865c2b0eaf494ab8ec45219c34c08c&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4803,
+      &quot;first_text_ms&quot;: 2452,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-6-astra&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3142,
+        &quot;output&quot;: 183,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4808
+  }
+]</pre></details></section>
+</div>
+<h2>Explain how an NPN transistor can switch a lamp in a simple low-side circuit, with a base resistor.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 3051 ms; 1 call attempts.</p>
+<p class="warn">Held at story: The renderer lacks circuit-symbol shapes for an NPN transistor, lamp, resistor, power source, and wiring.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-f03c6e798a0d40beabb3415fc490c756&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3046,
+      &quot;first_text_ms&quot;: 2970,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2372,
+        &quot;output&quot;: 228,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3049
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 30010 ms; 1 call attempts.</p>
+<p class="warn">Held at story: Notebook responder: deadline</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-66e225b564004343b5962ffc9057abc0&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;wall_ms&quot;: 30009
+  }
+]</pre></details></section>
+</div>
+<h2>Why is the daytime sky blue? Show sunlight, air scattering and the observer without implying air is blue paint.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 22065 ms; 5 call attempts.</p>
+<figure><img src="0-blue-sky-panel-p1.png" alt="Sunlight arrives as a mixture of visible colors."><figcaption>Sunlight arrives as a mixture of visible colors.</figcaption></figure>
+<figure><img src="0-blue-sky-panel-p2.png" alt="Tiny air molecules scatter blue light more strongly."><figcaption>Tiny air molecules scatter blue light more strongly.</figcaption></figure>
+<figure><img src="0-blue-sky-panel-p3.png" alt="Blue light is redirected across the sky toward your eyes."><figcaption>Blue light is redirected across the sky toward your eyes.</figcaption></figure>
+<figure><img src="0-blue-sky-panel-p4.png" alt="The sky looks blue because light scatters, not because air is blue."><figcaption>The sky looks blue because light scatters, not because air is blue.</figcaption></figure>
+<p><strong>Takeaway:</strong> Daylight sky appears blue because atmospheric molecules preferentially scatter blue wavelengths toward the observer; air is not blue paint.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-ca074319ba87485c956cd2404e425bcc&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4551,
+      &quot;first_text_ms&quot;: 2052,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2372,
+        &quot;output&quot;: 515,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4558
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-a8206efd5dd340369171f8a7bd9528a6&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4706,
+      &quot;first_text_ms&quot;: 4632,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2701,
+        &quot;output&quot;: 365,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4713
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-737fe7c3481e4ad2866dd3dbcecc2153&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 5815,
+      &quot;first_text_ms&quot;: 5682,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2825,
+        &quot;output&quot;: 560,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 5822
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-a2619954e60c44caa64b6e546b1ae81d&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2679,
+      &quot;first_text_ms&quot;: 2556,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2958,
+        &quot;output&quot;: 247,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2684
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-33626624d01f4ea58aa26a74bc0d30e1&quot;,
+    &quot;file&quot;: &quot;call-04-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3872,
+      &quot;first_text_ms&quot;: 3742,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3117,
+        &quot;output&quot;: 343,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3875
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>A condition affects 10 of 100 people. A test catches 8 of those 10 and falsely flags 9 of the other 90. Use a 2 by 2 count grid to explain the chance a positive person has the condition.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 19711 ms; 4 call attempts.</p>
+<p class="warn">Held at panel:positives: label placement search budget exceeded</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-bdf42020c5be40dca8068f698f19cef3&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 7012,
+      &quot;first_text_ms&quot;: 4309,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2400,
+        &quot;output&quot;: 850,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 7017
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-1c3b84ba730a4ec08a60c17e27a8406b&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4277,
+      &quot;first_text_ms&quot;: 3158,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2744,
+        &quot;output&quot;: 489,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4285
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-674cd0dea04e40b0b3d13a7bbcda6beb&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4402,
+      &quot;first_text_ms&quot;: 4165,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3071,
+        &quot;output&quot;: 272,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4407
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-49c552221b3345ae982ddfd0b2e41371&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3747,
+      &quot;first_text_ms&quot;: 3560,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3238,
+        &quot;output&quot;: 326,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3750
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Show visually why one half and two fourths represent the same amount.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 15632 ms; 4 call attempts.</p>
+<figure><img src="0-fractions-panel-p1.png" alt="One of two equal parts is one half."><figcaption>One of two equal parts is one half.</figcaption></figure>
+<figure><img src="0-fractions-panel-p2.png" alt="Splitting each half creates four equal fourths."><figcaption>Splitting each half creates four equal fourths.</figcaption></figure>
+<figure><img src="0-fractions-panel-p3.png" alt="Two fourths cover exactly the same amount as one half."><figcaption>Two fourths cover exactly the same amount as one half.</figcaption></figure>
+<p><strong>Takeaway:</strong> One half equals two fourths because splitting each half into two makes two fourths without changing the amount.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-8fa054bd9b7c4d47b5390c15bb31aafc&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3841,
+      &quot;first_text_ms&quot;: 2053,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2364,
+        &quot;output&quot;: 412,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3844
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-3d89ec67f62345e79f504d40edd646a6&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4084,
+      &quot;first_text_ms&quot;: 3759,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2654,
+        &quot;output&quot;: 313,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4091
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-cf1f37f58bec4c3dbf11d265de6dadad&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3839,
+      &quot;first_text_ms&quot;: 2526,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2852,
+        &quot;output&quot;: 167,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3841
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-903e153cbce348e18a54b0a087edc537&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3592,
+      &quot;first_text_ms&quot;: 3251,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2958,
+        &quot;output&quot;: 265,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3595
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Explain how sunlight drives evaporation, condensation and precipitation in the water cycle.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 19054 ms; 5 call attempts.</p>
+<figure><img src="0-water-cycle-panel-p1.png" alt="Sunlight warms surface water, helping liquid water become vapor."><figcaption>Sunlight warms surface water, helping liquid water become vapor.</figcaption></figure>
+<figure><img src="0-water-cycle-panel-p2.png" alt="Higher, cooler air turns water vapor into tiny droplets."><figcaption>Higher, cooler air turns water vapor into tiny droplets.</figcaption></figure>
+<figure><img src="0-water-cycle-panel-p3.png" alt="Heavy cloud droplets fall as rain, snow, sleet, or hail."><figcaption>Heavy cloud droplets fall as rain, snow, sleet, or hail.</figcaption></figure>
+<figure><img src="0-water-cycle-panel-p4.png" alt="Returned water can evaporate again, continuing the water cycle."><figcaption>Returned water can evaporate again, continuing the water cycle.</figcaption></figure>
+<p><strong>Takeaway:</strong> Sunlight supplies energy for evaporation; cooling causes condensation, and gravity produces precipitation. This repeats as water returns to Earth.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-09df4726e8314b1cb02f3e78241bb744&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4158,
+      &quot;first_text_ms&quot;: 1696,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2364,
+        &quot;output&quot;: 483,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4163
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-4c6e9f35973b44c5894eef40adf36717&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3148,
+      &quot;first_text_ms&quot;: 2990,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2705,
+        &quot;output&quot;: 271,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3156
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-6b7166aa1be44094831577604bb4f9ac&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3876,
+      &quot;first_text_ms&quot;: 3721,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2835,
+        &quot;output&quot;: 250,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3885
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-54b62ffbb09a43e0ae86cc1a276daefb&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4007,
+      &quot;first_text_ms&quot;: 3897,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2944,
+        &quot;output&quot;: 197,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4013
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-1e3061559db64f7a95e07871ae19c040&quot;,
+    &quot;file&quot;: &quot;call-04-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3580,
+      &quot;first_text_ms&quot;: 3532,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3054,
+        &quot;output&quot;: 179,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3583
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Use a right triangle with legs 3 and 4 and squares on its sides to explain why the hypotenuse is 5; distinguish this example from a general proof.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 15652 ms; 3 call attempts.</p>
+<p class="warn">Held at panel:p2: missing or unknown drawing fields</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-3912af95b59345fd869686de6c98050c&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6574,
+      &quot;first_text_ms&quot;: 3787,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2385,
+        &quot;output&quot;: 749,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6578
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-396521bd203c4753a8e2cb38b56c3e33&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6156,
+      &quot;first_text_ms&quot;: 5029,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2740,
+        &quot;output&quot;: 627,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6162
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-d94a24a0e00a48059fbc6187f3cb69a4&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2869,
+      &quot;first_text_ms&quot;: 2306,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3030,
+        &quot;output&quot;: 238,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2872
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Explain visually why two different inputs with the same output prevent a function from having an inverse.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 11758 ms; 1 call attempts.</p>
+<p class="warn">Held at story: missing or unknown drawing fields</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-944511d1447944499e2113e97e405c42&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 11747,
+      &quot;first_text_ms&quot;: 2922,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2368,
+        &quot;output&quot;: 459,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 11753
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Explain visually how two different sensors can both trigger the same alarm, and why hearing the alarm alone does not identify which sensor triggered it.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 18579 ms; 5 call attempts.</p>
+<figure><img src="0-sensor-alarm-panel-sensors.png" alt="Two different sensors can start the process."><figcaption>Two different sensors can start the process.</figcaption></figure>
+<figure><img src="0-sensor-alarm-panel-routes.png" alt="Either sensor can send the alarm signal."><figcaption>Either sensor can send the alarm signal.</figcaption></figure>
+<figure><img src="0-sensor-alarm-panel-samealarm.png" alt="Different inputs can produce the same alarm."><figcaption>Different inputs can produce the same alarm.</figcaption></figure>
+<figure><img src="0-sensor-alarm-panel-reverse.png" alt="Hearing the alarm alone cannot reveal which sensor fired."><figcaption>Hearing the alarm alone cannot reveal which sensor fired.</figcaption></figure>
+<p><strong>Takeaway:</strong> The alarm is a shared output: it confirms that some sensor triggered, but not which one without additional information.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-5474cceab315483aaaa9d1b3d6b3e743&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6132,
+      &quot;first_text_ms&quot;: 3390,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2377,
+        &quot;output&quot;: 499,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6141
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-a405aa24539046acb05d19a358162545&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2484,
+      &quot;first_text_ms&quot;: 2424,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2683,
+        &quot;output&quot;: 137,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2491
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-6b9c14d878014ef4a778d380adc03c8d&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2199,
+      &quot;first_text_ms&quot;: 2094,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2788,
+        &quot;output&quot;: 135,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2203
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-2198f050b2df48fe9921672a2f11be3e&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3768,
+      &quot;first_text_ms&quot;: 3685,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2904,
+        &quot;output&quot;: 316,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3774
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-f6292cd245ee43889ce9f6a9abc30d5d&quot;,
+    &quot;file&quot;: &quot;call-04-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 3722,
+      &quot;first_text_ms&quot;: 3451,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 3003,
+        &quot;output&quot;: 219,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 3725
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Explain visually how two lemmas can together support a theorem, and why proving only one lemma is not enough.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 4766 ms; 1 call attempts.</p>
+<p class="warn">Held at story: missing or unknown drawing fields</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-c5738596b344488a84c22918db5d4b92&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 4761,
+      &quot;first_text_ms&quot;: 1971,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2372,
+        &quot;output&quot;: 544,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 4764
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+<h2>Explain visually why a service that needs both a database and a network connection fails if either dependency is unavailable.</h2><div class="pair">
+<section class="model"><h3>Expected model: gpt-5.6-luna</h3>
+<p>Per-call limit: 30000 ms</p>
+<p>Full pipeline: 18818 ms; 4 call attempts.</p>
+<p class="warn">Held at panel:p3: The inherited connection cannot be removed or marked broken, and the symbolic shapes lack a failure indicator.</p>
+<details><summary>Per-call model timing and usage</summary><pre>[
+  {
+    &quot;task&quot;: &quot;story&quot;,
+    &quot;request_id&quot;: &quot;notebook-0f23783b84874190bcff2a7ea5a10d6b&quot;,
+    &quot;file&quot;: &quot;call-00-story&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 5004,
+      &quot;first_text_ms&quot;: 3726,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2371,
+        &quot;output&quot;: 476,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 5013
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-9bff58809b1840878cdd473cc2d963bc&quot;,
+    &quot;file&quot;: &quot;call-01-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 2196,
+      &quot;first_text_ms&quot;: 2027,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2641,
+        &quot;output&quot;: 180,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 2203
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-b28aa8a03ec74ec08794e182f58e5fc3&quot;,
+    &quot;file&quot;: &quot;call-02-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 6284,
+      &quot;first_text_ms&quot;: 6226,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2792,
+        &quot;output&quot;: 575,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 6289
+  },
+  {
+    &quot;task&quot;: &quot;panel&quot;,
+    &quot;request_id&quot;: &quot;notebook-aad8f49239ac4a63ac308d45c37a64a3&quot;,
+    &quot;file&quot;: &quot;call-03-panel&quot;,
+    &quot;metrics&quot;: {
+      &quot;elapsed_ms&quot;: 5244,
+      &quot;first_text_ms&quot;: 5191,
+      &quot;provider&quot;: &quot;openai-codex&quot;,
+      &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+      &quot;reasoning_requested&quot;: &quot;minimal&quot;,
+      &quot;requested_output_tokens&quot;: 2400,
+      &quot;usage&quot;: {
+        &quot;input&quot;: 2794,
+        &quot;output&quot;: 440,
+        &quot;cacheRead&quot;: 0,
+        &quot;cacheWrite&quot;: 0
+      }
+    },
+    &quot;wall_ms&quot;: 5248
+  }
+]</pre></details></section>
+<section class="model"><h3>Expected model: gpt-6-astra</h3>
+<p>Per-call limit: 30000 ms</p>
+<p class="warn">Not attempted — no model result.</p></section>
+</div>
+</html>

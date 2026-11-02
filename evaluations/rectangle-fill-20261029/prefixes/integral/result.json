@@ -1,0 +1,141 @@
+{
+  "valid": true,
+  "geometry_validated": true,
+  "ink_encoding_validated": true,
+  "native_delivery_supported": false,
+  "tablet_proven": false,
+  "model_calls": 0,
+  "quality_status": "unreviewed",
+  "preview_complete": true,
+  "panels": [
+    {
+      "id": "p1",
+      "base": null,
+      "caption": "The integral is the area under y=x² from zero to one.",
+      "svg": "panel-p1.svg",
+      "png": "panel-p1.png",
+      "snapshot_points": 871,
+      "added_points": 871,
+      "label_layout": [
+        {
+          "id": "__frame-xmin",
+          "label_box": [
+            170.20000000000002,
+            296.0,
+            194.20000000000002,
+            326.0
+          ],
+          "at": [
+            176.20000000000002,
+            320.0
+          ],
+          "lines": [
+            "0"
+          ],
+          "size": 18
+        },
+        {
+          "id": "__frame-xmax",
+          "label_box": [
+            394.00000000000006,
+            296.0,
+            450.4000000000001,
+            326.0
+          ],
+          "at": [
+            400.00000000000006,
+            320.0
+          ],
+          "lines": [
+            "1.1"
+          ],
+          "size": 18
+        },
+        {
+          "id": "__frame-ymin",
+          "label_box": [
+            140.20000000000002,
+            275.0,
+            164.20000000000002,
+            305.0
+          ],
+          "at": [
+            146.20000000000002,
+            299.0
+          ],
+          "lines": [
+            "0"
+          ],
+          "size": 18
+        },
+        {
+          "id": "__frame-ymax",
+          "label_box": [
+            119.8,
+            35.0,
+            176.2,
+            65.0
+          ],
+          "at": [
+            125.8,
+            59.0
+          ],
+          "lines": [
+            "1.1"
+          ],
+          "size": 18
+        },
+        {
+          "id": "curvelabel",
+          "label_box": [
+            223.34900189576283,
+            151.97040238499028,
+            312.1490018957628,
+            187.97040238499028
+          ],
+          "at": [
+            229.34900189576283,
+            175.97040238499028
+          ],
+          "lines": [
+            "y=x^2"
+          ],
+          "size": 18
+        },
+        {
+          "id": "boundlabel",
+          "label_box": [
+            406.3818181818182,
+            155.0,
+            462.78181818181815,
+            185.0
+          ],
+          "at": [
+            412.3818181818182,
+            179.0
+          ],
+          "lines": [
+            "x=1"
+          ],
+          "size": 18
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "base": "p1",
+      "caption": "Thin rectangles approximate the curved region more closely.",
+      "svg": "panel-p2.svg",
+      "png": "panel-p2.png",
+      "snapshot_points": 2133,
+      "added_points": 1262,
+      "label_layout": []
+    }
+  ],
+  "source_sha256": {
+    "story": "928bf45cb76b1a8303a7020f597b103acf18d7971877cd438c3a132d1a5edb31",
+    "shapes": "86af24dbf5000e5db6306a4bcaeafc29073736e30f9ff01e4f2414ed0bf90171"
+  },
+  "snapshot_points": 3004,
+  "index": "index.html"
+}

@@ -1,0 +1,127 @@
+{
+  "valid": true,
+  "geometry_validated": true,
+  "ink_encoding_validated": true,
+  "native_delivery_supported": false,
+  "tablet_proven": false,
+  "model_calls": 0,
+  "quality_status": "unreviewed",
+  "preview_complete": true,
+  "panels": [
+    {
+      "id": "p1",
+      "base": null,
+      "caption": "One cell makes a one-by-one square.",
+      "svg": "panel-p1.svg",
+      "png": "panel-p1.png",
+      "snapshot_points": 938,
+      "added_points": 938,
+      "label_layout": [
+        {
+          "id": "__grid-xmin",
+          "label_box": [
+            168.0,
+            296.0,
+            192.0,
+            326.0
+          ],
+          "at": [
+            174.0,
+            320.0
+          ],
+          "lines": [
+            "0"
+          ],
+          "size": 18
+        },
+        {
+          "id": "__grid-xmax",
+          "label_box": [
+            408.0,
+            296.0,
+            432.0,
+            326.0
+          ],
+          "at": [
+            414.0,
+            320.0
+          ],
+          "lines": [
+            "1"
+          ],
+          "size": 18
+        },
+        {
+          "id": "__grid-ymin",
+          "label_box": [
+            138.0,
+            275.0,
+            162.0,
+            305.0
+          ],
+          "at": [
+            144.0,
+            299.0
+          ],
+          "lines": [
+            "0"
+          ],
+          "size": 18
+        },
+        {
+          "id": "__grid-ymax",
+          "label_box": [
+            150.0,
+            35.0,
+            174.0,
+            65.0
+          ],
+          "at": [
+            156.0,
+            59.0
+          ],
+          "lines": [
+            "1"
+          ],
+          "size": 18
+        },
+        {
+          "id": "one",
+          "label_box": [
+            253.5,
+            14.0,
+            346.5,
+            44.0
+          ],
+          "at": [
+            259.5,
+            38.0
+          ],
+          "lines": [
+            "1 cell"
+          ],
+          "size": 18,
+          "leaders": [
+            {
+              "op": "line",
+              "from": [
+                300.0,
+                44.0
+              ],
+              "to": [
+                300.0,
+                50.0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "source_sha256": {
+    "story": "cbc3180beb07eae860ac1e61f1d6a20f1f51909e5c245d14d84a326113631c43",
+    "shapes": "6f4977645ba060df453d72f9dabd70d973c265c3089ebf8ad83a093e18b32a87"
+  },
+  "snapshot_points": 938,
+  "index": "index.html"
+}
