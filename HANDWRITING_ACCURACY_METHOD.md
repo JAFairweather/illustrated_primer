@@ -87,6 +87,58 @@ generic error. Commit synthetic tests and final aggregate numeric results with
 the model/prompt/config digests and sample method. A green local test does not
 establish tablet access, page eligibility or model accuracy.
 
+## Run sheet once the reviewed export route is installed
+
+1. **Prepare before James's confirmations.** Pi Dog records the installed
+   export action's reviewed commit and checks its read-only tablet access,
+   Dennis-only private drop and counts-only stdout. The runner prepares a
+   private manifest/worksheet outside git, freezes the sample seed and OCR
+   prompt, verifies the Gemini and Luna adapters, and records their model IDs,
+   settings and prompt/config digests. Stop if access, image handling or an arm
+   is unavailable; do not substitute the production `read_letter` path.
+2. **Confirm authorship.** Pi Dog freezes the candidate metadata snapshot with
+   stable opaque page IDs and a private mapping to tablet IDs. James sees the
+   enumerated list on his private desk page and affirms all listed pages in a
+   notebook except named IDs, or marks uncertain pages. Expand his answer into
+   a private page-linked yes/no/uncertain record with attester, time and basis.
+   Notebook ownership alone is not proof. Use James-only thumbnails only when
+   metadata cannot support a confident answer; uncertain pages are ineligible.
+3. **Check content, then sample.** Rank confirmed candidate IDs by the frozen
+   seed and the sampler's SHA-256 seed-plus-ID rule. Pi Dog exports saved pages
+   read-only in that order and records each source hash before and after its
+   read. Dennis verifies the received file/image hashes, renders/crops each
+   page privately, and excludes blank, agent-only, drawing-only, mixed or
+   duplicate images. Continue until 100 eligible pages and up to 20 ranked
+   reserves are ready. Run `handwriting_sample.py` on the checked manifest and
+   freeze its output, PNG hashes and crop coordinates before model calls. The
+   reported eligible count covers checked candidates, not an uninspected tablet
+   population. Stop if fewer than 100 qualify.
+4. **Run frozen model arms.** Feed the exact frozen PNG and prompt to each
+   configured arm, once per page/arm; keep outputs and errors bound to opaque
+   ID and image hash in private JSONL. Never choose replacements using model
+   results. Freeze the effective live Gemini override before calls, while
+   reporting the direct Gemini arm as model-level OCR only.
+5. **Collect James's references last.** Dead Rabbit sends one private worksheet
+   batch of about ten images at a time, with no model text shown. Bind each
+   saved transcription to its opaque ID and frozen image hash. For `[unclear]`
+   or untranscribable pages, take the next ranked reserve; run its model arms
+   before asking James for that reserve's transcription. Do not lower the
+   100-usable-page target or choose a reserve by model performance.
+6. **Score and report.** Run `handwriting_accuracy.py --require-complete` only
+   after 100 usable references and complete Gemini/Luna outputs (plus Astra if
+   enabled) exist. If an arm is missing or errored, report the failure counts
+   and pause the comparison; incomplete-arm CER/WER are not a B3 result.
+
+Private only: tablet identifiers and paths, candidate list, attestation,
+source/page/image hashes, crops, PNGs, sample seed and manifest, exact prompt,
+model outputs/errors, James's text, per-page edits and worksheet. Buzz, Hive and
+the public repo may receive **aggregate counts and non-page-linked SHA-256
+digests** of the frozen manifest, prompt/config and code, never individual page
+hashes or a private path. After a complete run, publish only aggregate CER/WER
+and scored/error/missing counts per model, with the method and exclusions;
+inspect the scorer's JSON for private fields first. A digest proves which
+private artifact was used, not that its contents or James's authorship are valid.
+
 ## References and score
 
 Give James ten private batches of about ten frozen page PNGs each. Each entry
