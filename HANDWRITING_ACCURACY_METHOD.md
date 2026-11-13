@@ -105,8 +105,9 @@ establish tablet access, page eligibility or model accuracy.
    metadata cannot support a confident answer; uncertain pages are ineligible.
 3. **Check content, then sample.** Rank confirmed candidate IDs by the frozen
    seed and the sampler's SHA-256 seed-plus-ID rule. Pi Dog exports saved pages
-   read-only in that order; Dennis checks stable source hashes, renders/crops
-   each page privately, and excludes blank, agent-only, drawing-only, mixed or
+   read-only in that order and records each source hash before and after its
+   read. Dennis verifies the received file/image hashes, renders/crops each
+   page privately, and excludes blank, agent-only, drawing-only, mixed or
    duplicate images. Continue until 100 eligible pages and up to 20 ranked
    reserves are ready. Run `handwriting_sample.py` on the checked manifest and
    freeze its output, PNG hashes and crop coordinates before model calls. The
