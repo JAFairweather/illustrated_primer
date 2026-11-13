@@ -55,29 +55,39 @@ rather than quietly retrying or replacing them.
    page-linked provenance record; record who confirmed it, when, and the basis
    for the confirmation. Notebook ownership, handwriting appearance, and a
    generic "human handwriting" label are insufficient. Mark a page eligible
-   only when James's authorship is confirmed and it contains unambiguous
-   handwriting to transcribe. Exclude uncertain authorship, blank, agent-only,
-   drawing-only and inseparably mixed human/agent pages. When a James-written
-   region can be isolated, freeze one crop per physical page; log its coordinates
-   privately and use the same PNG for every model and for James. Do not silently
-   change crops after scoring.
+   only when James's authorship is confirmed, he explicitly permits that
+   enumerated page to leave the box for the configured Gemini and Luna OCR
+   calls (and Astra if enabled), and it contains unambiguous handwriting to
+   transcribe. Record this provider permission separately from authorship for
+   each page. James may mark a sensitive page ineligible; missing or uncertain
+   permission also makes it ineligible. Exclude uncertain authorship, blank,
+   agent-only, drawing-only and inseparably mixed human/agent pages. When a
+   James-written region can be isolated, freeze one crop per physical page; log
+   its coordinates privately and use the same PNG for every model and for James.
+   Do not silently change crops after scoring.
 3. Hash each read source file before and after collection; exclude a page if
    its saved bytes changed during the read. Hash the frozen PNG. Give each
    physical page an opaque ID. Keep notebook IDs, page IDs, crop coordinates,
    file paths, PNGs, hashes and James-authorship evidence in the private
    manifest, never in git or Buzz.
 4. Create candidate JSONL rows with `page`, `image_sha256`, `notebook`, and
-   `eligible` (Boolean). Set `eligible` true only after the James-authorship and
-   content checks in step 2; the sampler does not verify provenance itself.
-   Reject duplicate eligible PNGs so cloned pages do not count twice. Run
-   `handwriting_sample.py --candidates ... --seed ...
+   `eligible` (Boolean). Set `eligible` true only after the James-authorship,
+   provider-permission and content checks in step 2; the sampler does not
+   verify these itself. For identical eligible PNG hashes, keep the page ID
+   ranked first by the frozen seed and the sampler's seed-plus-ID rule; mark
+   every lower-ranked duplicate ineligible and record the reason privately.
+   The sampler rejects duplicate eligible hashes, so resolve them before
+   running it. Run `handwriting_sample.py --candidates ... --seed ...
    --output ...` with private paths outside the checkout. Freeze the seed
    before model calls. The script ranks eligible pages by SHA-256 of seed plus
    opaque page ID, selects 100 and lists up to 20 reserves in deterministic
    order. It stops if fewer than 100 are eligible. Record exclusion/replacement
    reasons privately; use reserves in rank order only when James marks a page
-   untranscribable, and never because a model did poorly. Record notebook mix
-   and date range as aggregate metadata in the final method report.
+   unclear or untranscribable, and never because a model did poorly. If all
+   listed reserves are used and fewer than 100 usable references remain, stop and
+   report an incomplete run; do not silently extend the frozen sample or
+   publish CER/WER as a B3 result. Record notebook mix and date range as
+   aggregate metadata in the final method report.
 
 No raw handwriting, reference text, verbatim model output, page-linked score,
 device path or private manifest is committed. Keep all private inputs outside
@@ -96,26 +106,39 @@ establish tablet access, page eligibility or model accuracy.
    prompt, verifies the Gemini and Luna adapters, and records their model IDs,
    settings and prompt/config digests. Stop if access, image handling or an arm
    is unavailable; do not substitute the production `read_letter` path.
-2. **Confirm authorship.** Pi Dog freezes the candidate metadata snapshot with
-   stable opaque page IDs and a private mapping to tablet IDs. James sees the
+2. **Confirm authorship and external transmission.** Pi Dog freezes the
+   candidate metadata snapshot with stable opaque page IDs and a private
+   mapping to tablet IDs. James sees the
    enumerated list on his private desk page and affirms all listed pages in a
    notebook except named IDs, or marks uncertain pages. Expand his answer into
-   a private page-linked yes/no/uncertain record with attester, time and basis.
-   Notebook ownership alone is not proof. Use James-only thumbnails only when
-   metadata cannot support a confident answer; uncertain pages are ineligible.
+   a private page-linked yes/no/uncertain authorship record with attester, time
+   and basis. Separately, show James the enumerated pages and configured model
+   providers, and obtain his explicit page-linked attestation that those images
+   may leave the box for Gemini and Luna OCR calls (and Astra if enabled).
+   Record the attester, time, provider set and permitted/ineligible/uncertain
+   choice per page. He may mark sensitive pages ineligible. Notebook ownership
+   alone is not proof or permission. Use James-only thumbnails when the list
+   does not let him judge authorship or sensitivity; never infer permission from
+   silence. An uncertain authorship or transmission choice makes the page
+   ineligible.
 3. **Check content, then sample.** Rank confirmed candidate IDs by the frozen
    seed and the sampler's SHA-256 seed-plus-ID rule. Pi Dog exports saved pages
    read-only in that order and records each source hash before and after its
    read. Dennis verifies the received file/image hashes, renders/crops each
    page privately, and excludes blank, agent-only, drawing-only, mixed or
-   duplicate images. Continue until 100 eligible pages and up to 20 ranked
+   duplicate images. For identical PNGs that otherwise qualify, keep the
+   higher-ranked page ID and mark lower-ranked duplicates ineligible before
+   running the sampler. Continue until 100 eligible pages and up to 20 ranked
    reserves are ready. Run `handwriting_sample.py` on the checked manifest and
    freeze its output, PNG hashes and crop coordinates before model calls. The
    reported eligible count covers checked candidates, not an uninspected tablet
    population. Stop if fewer than 100 qualify.
-4. **Run frozen model arms.** Feed the exact frozen PNG and prompt to each
-   configured arm, once per page/arm; keep outputs and errors bound to opaque
-   ID and image hash in private JSONL. Never choose replacements using model
+4. **Run frozen model arms.** Before each provider call, verify that the frozen
+   page-linked record explicitly permits that image to leave the box for that
+   provider; stop if permission is absent, uncertain or withdrawn. Feed the
+   exact frozen PNG and prompt to each configured arm, once per page/arm; keep
+   outputs and errors bound to opaque ID and image hash in private JSONL. Never
+   choose replacements using model
    results. Freeze the effective live Gemini override before calls, while
    reporting the direct Gemini arm as model-level OCR only.
 5. **Collect James's references last.** Dead Rabbit sends one private worksheet
@@ -123,7 +146,11 @@ establish tablet access, page eligibility or model accuracy.
    saved transcription to its opaque ID and frozen image hash. For `[unclear]`
    or untranscribable pages, take the next ranked reserve; run its model arms
    before asking James for that reserve's transcription. Do not lower the
-   100-usable-page target or choose a reserve by model performance.
+   100-usable-page target or choose a reserve by model performance. If the
+   ranked list of up to 20 reserves is exhausted before 100 usable references
+   exist, stop and report the incomplete run and exclusion counts. Any further
+   collection requires a separately frozen, reviewed run and fresh page-linked
+   permission; do not append pages to this sample or report B3 CER/WER.
 6. **Score and report.** Run `handwriting_accuracy.py --require-complete` only
    after 100 usable references and complete Gemini/Luna outputs (plus Astra if
    enabled) exist. If an arm is missing or errored, report the failure counts
