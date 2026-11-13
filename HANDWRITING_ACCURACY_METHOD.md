@@ -7,16 +7,22 @@ rates per model. Pi Dog reviews this method before live collection.
 
 ## Model list and frozen task
 
-The current letter reader's source default is `gemini-3.5-flash-lite` in
-`herd-board-serve` (`MODEL`, `READ_SYS`, `read_letter`). It can be overridden by
-`HERD_BOARD_MODEL`; verify the effective live value before collecting. Its
+The public snapshot's letter reader defaults to `gemini-3.5-flash-lite` in
+`herd-board-serve` (`MODEL`, `READ_SYS`, `read_letter`) and reads
+`HERD_BOARD_MODEL`. The installed Primer reader, checked at
+`/opt/primer/current/herd-board-serve:69` on 2026-11-13, reads
+`PRIMER_MODEL` first, then `HERD_BOARD_MODEL`, then that default. Before model
+calls, have the authorized operator check both override names in the service
+environment, resolve that precedence, reject an empty effective model ID, and
+freeze the effective ID with the run configuration privately. Do not infer the
+live ID from this public snapshot or print the service's full environment. The
 number-check second read uses the same model with a different prompt and is a
 production policy, not an independent model. The Primer's Pi/GPT-5.6 Luna
 medium baseline in `DOODLE_ARCHITECTURE.md` is for lesson roles, not letter OCR.
 
 | Arm | Source/status | Configuration to freeze before calls |
 | --- | --- | --- |
-| `gemini-3.5-flash-lite` | Current source default; live setting unverified | Direct Gemini image call; first OCR read, JSON `text`; record effective model and generation settings |
+| `gemini-3.5-flash-lite` | Public and installed source default; effective live setting unverified | Direct Gemini image call under the shared transcription prompt; record effective model and generation settings |
 | `gpt-5.6-luna` | Planned comparator, no B3 calls yet | Pi/OpenAI-Codex image input, medium effort; verify model availability and a transcription-only adapter |
 | `gpt-6-astra` | Optional third arm, no B3 calls yet | Pi/OpenAI-Codex image input, high effort; verify availability and the same adapter |
 
@@ -26,10 +32,13 @@ math; do not solve or answer the question. Return one text string, with an
 explicit unreadable marker for uncertain symbols. Save the exact prompt bytes,
 digest, model ID, effort, output cap and adapter version privately with the run.
 The existing lesson responder produces teaching JSON and cannot stand in for a
-B3 OCR call. The production `read_letter` numeric double-read is a separate
-policy check after the per-model comparison. Make at most one successful
-response per page/arm in the primary comparison; preserve failures rather than
-quietly retrying or replacing them.
+B3 OCR call. The direct Gemini arm measures model-level OCR under the same
+frozen prompt and image as the comparator arms. It does not measure production
+`read_letter` end-to-end accuracy: that path uses `READ_SYS` and may make a
+second number-check read with `NUMBER_READ_SYS`. Evaluate that production path
+separately if needed; do not call its result the B3 Gemini arm. Make at most one
+successful response per page/arm in the primary comparison; preserve failures
+rather than quietly retrying or replacing them.
 
 ## Read-only page selection
 
@@ -41,19 +50,27 @@ quietly retrying or replacing them.
    screen frame. Ask the tablet operator to perform this step if this seat
    cannot reach it.
 2. In private local storage outside every checkout, render page images and
-   inspect them **before** any model output or reference transcription. Mark a
-   page eligible only if it contains unambiguous human handwriting to
-   transcribe. Exclude blank, agent-only, drawing-only and inseparably mixed
-   human/agent pages. When a human region can be isolated, freeze one crop per
-   physical page; log its coordinates privately and use the same PNG for every
-   model and for James. Do not silently change crops after scoring.
+   inspect them **before** any model output or reference transcription. Before
+   sampling, have James confirm authorship of each candidate page in a private
+   page-linked provenance record; record who confirmed it, when, and the basis
+   for the confirmation. Notebook ownership, handwriting appearance, and a
+   generic "human handwriting" label are insufficient. Mark a page eligible
+   only when James's authorship is confirmed and it contains unambiguous
+   handwriting to transcribe. Exclude uncertain authorship, blank, agent-only,
+   drawing-only and inseparably mixed human/agent pages. When a James-written
+   region can be isolated, freeze one crop per physical page; log its coordinates
+   privately and use the same PNG for every model and for James. Do not silently
+   change crops after scoring.
 3. Hash each read source file before and after collection; exclude a page if
    its saved bytes changed during the read. Hash the frozen PNG. Give each
    physical page an opaque ID. Keep notebook IDs, page IDs, crop coordinates,
-   file paths, PNGs and hashes in the private manifest, never in git or Buzz.
+   file paths, PNGs, hashes and James-authorship evidence in the private
+   manifest, never in git or Buzz.
 4. Create candidate JSONL rows with `page`, `image_sha256`, `notebook`, and
-   `eligible` (Boolean). Reject duplicate eligible PNGs so cloned pages do not
-   count twice. Run `handwriting_sample.py --candidates ... --seed ...
+   `eligible` (Boolean). Set `eligible` true only after the James-authorship and
+   content checks in step 2; the sampler does not verify provenance itself.
+   Reject duplicate eligible PNGs so cloned pages do not count twice. Run
+   `handwriting_sample.py --candidates ... --seed ...
    --output ...` with private paths outside the checkout. Freeze the seed
    before model calls. The script ranks eligible pages by SHA-256 of seed plus
    opaque page ID, selects 100 and lists up to 20 reserves in deterministic
@@ -116,4 +133,4 @@ python3 handwriting_accuracy.py --references /private/b3/references.jsonl \
 The command writes only an aggregate JSON summary to stdout. Inspect it for
 private identifiers or text before committing the results. Pi Dog's method
 review, authorized read-only tablet access, available model adapters, 100
-eligible pages and James's references remain live gates.
+James-authored eligible pages and James's references remain live gates.
