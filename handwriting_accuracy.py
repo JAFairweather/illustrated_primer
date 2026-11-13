@@ -14,6 +14,7 @@ import unicodedata
 
 
 MODELS = ('gemini-3.5-flash-lite', 'gpt-5.6-luna', 'gpt-6-astra')
+REQUIRED_B3_MODELS = {'gemini-3.5-flash-lite', 'gpt-5.6-luna'}
 ERRORS = {'timeout', 'unavailable', 'invalid_response', 'provider_error'}
 
 
@@ -76,6 +77,8 @@ def score(references, outputs, models=MODELS, require_complete=False):
         raise ValueError('complete B3 report requires 100 reference pages')
     if len(set(models)) != len(models) or not models or any(m not in MODELS for m in models):
         raise ValueError('unknown or duplicate model')
+    if require_complete and not REQUIRED_B3_MODELS.issubset(models):
+        raise ValueError('complete B3 report requires Gemini baseline and Pi comparator')
     seen = set()
     data = {model: {'scored': 0, 'errors': 0, 'char_edits': 0, 'ref_chars': 0,
                     'word_edits': 0, 'ref_words': 0} for model in models}

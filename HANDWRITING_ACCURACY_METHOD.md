@@ -96,7 +96,12 @@ by total reference characters; word error rate uses whitespace-delimited words
 with the same corpus-weighted formula. Report `scored`, `errors`, and `missing`
 beside each rate, because a rate over successful calls alone hides failures.
 `--require-complete` requires 100 reference pages and a scored output from
-every selected arm on every page. Report math and uncertain-page exclusions
+both the Gemini baseline and GPT-5.6 Luna comparator on every page; GPT-6 Astra
+may be added as a third arm and is then required on every page too. Without
+`--require-complete`, each model's CER and WER cover only its answered pages;
+the same model object prints `scored`, `errors`, and `missing` beside its rates.
+Do not compare incomplete-arm rates as a B3 result, because failures can hide
+hard pages. Report math and uncertain-page exclusions
 separately if they materially affect interpretation; the primary score remains
 literal.
 

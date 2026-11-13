@@ -57,6 +57,21 @@ class HandwritingAccuracyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'uncertain reference'):
             score([ref('p1', 'one [unclear] two')], [], ('gpt-5.6-luna',))
 
+    def test_complete_gate_requires_baseline_and_pi_comparator(self):
+        references = [ref(f'p{i}', 'hello') for i in range(100)]
+        gemini_outputs = [out(f'p{i}', 'gemini-3.5-flash-lite', 'hello')
+                          for i in range(100)]
+        with self.assertRaisesRegex(ValueError, 'baseline and Pi comparator'):
+            score(references, gemini_outputs, ('gemini-3.5-flash-lite',), True)
+        with self.assertRaisesRegex(ValueError, 'baseline and Pi comparator'):
+            score(references, [out(f'p{i}', 'gpt-5.6-luna', 'hello')
+                               for i in range(100)], ('gpt-5.6-luna',), True)
+
+        complete = score(references, gemini_outputs + [
+            out(f'p{i}', 'gpt-5.6-luna', 'hello') for i in range(100)
+        ], ('gemini-3.5-flash-lite', 'gpt-5.6-luna'), True)
+        self.assertEqual(complete['models']['gpt-5.6-luna']['missing'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
