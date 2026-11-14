@@ -61,7 +61,9 @@ def prepare_images(destination, *, image_style='legacy'):
             draw.text((12, 12), 'OFFLINE TYPESET QUESTION', fill='black')
             draw.multiline_text((12, 42), '\n'.join(textwrap.wrap(question, 40)),
                                 fill='black', spacing=8)
-            image = image.resize((960, 720), Image.Resampling.NEAREST)
+            # At this exact 3x scale BOX repeats source pixels, as NEAREST does,
+            # without depending on Pillow's broken NEAREST path on some builds.
+            image = image.resize((960, 720), Image.Resampling.BOX)
         else:
             image = Image.new('RGB', (960, 720), 'white')
             draw = ImageDraw.Draw(image)

@@ -161,6 +161,7 @@ class NativeProbeTest(unittest.TestCase):
                 store.claim(dict(claim, ui_locked=False), context)
             self.assertFalse(store.claims.exists(), 'unsafe claim cannot even create a journal directory')
             store.claims.mkdir(mode=0o755)
+            store.claims.chmod(0o755)  # mkdir's mode is masked by the runner's umask.
             with self.assertRaises(ValueError):
                 store.claim(claim, context)
 

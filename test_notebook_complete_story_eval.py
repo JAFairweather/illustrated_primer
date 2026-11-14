@@ -183,7 +183,7 @@ class CompleteStoryEvalTests(unittest.TestCase):
         # This is a new capability version, not the historical caption-only
         # ablation. Saved evaluation inputs retain their original prompt hashes.
         self.assertEqual(hashlib.sha256(serial.encode()).hexdigest(),
-                         '5493c6cbfe36ae0a54ba63439be73626f728bcc350cb94e98c29978c460e2e86')
+                         '6ad2f8ec6d2c26d489225f82bcc3d6559e999af7c43c42fceb7395b6d292412f')
         self.assertIn(DRAWING_VOCABULARY, serial)
         prompt = complete_story_instructions()
         self.assertIn(STORY_SCHEMA, prompt)

@@ -63,12 +63,14 @@ class MathematicalCalloutTests(unittest.TestCase):
             return lambda box:[]
         return _candidates(bounds,side,**kwargs)
 
-    def test_compiler_fallback_preserves_math_and_charges_native_ink(self):
+    def test_compiler_refuses_unsafe_fallback_and_preserves_math_and_native_ink(self):
         story,drafts=graph_reuse_example()
         original=deepcopy((story,drafts))
         with patch('notebook_panel_shapes._candidates',side_effect=self.force_point_fallback):
-            compiled=compile_panel_shapes(story,drafts)
-            bundle=native_story_bundle(story,drafts)
+            with self.assertRaises(LabelPlacementError):
+                compile_panel_shapes(story,drafts)
+        compiled=compile_panel_shapes(story,drafts)
+        bundle=native_story_bundle(story,drafts)
         panel=compiled['panels']['mark']
         self.assertEqual((story,drafts),original)
         self.assert_on_owner(panel['groups']['note'][0]['to'],panel['groups']['half'])
