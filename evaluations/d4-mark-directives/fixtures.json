@@ -4,27 +4,27 @@
   "fixtures": [
     {
       "mark": "tick",
-      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "review-pr-42", "mark_id": "ink-001", "actor": "james-tablet-identity"},
+      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "review-pr-42", "mark_id": "ink-001", "actor": "james-tablet-identity", "current_owner": "owner-pr-42", "geometry": {"space": "page-normalized", "points": [[0.08, 0.20], [0.10, 0.23], [0.14, 0.16]]}, "crop_ref": "synthetic-crop-001"},
       "directive": {"intent": "approve_review", "target": {"kind": "pull_request", "repo": "example/primer", "number": 42, "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "expires_at": "2026-11-15T18:00:00Z"},
       "expected": {"action": "record_review_approval", "read_back": "approval at exact head with review event ID", "merge": "separate gated action"}
     },
     {
       "mark": "strike",
-      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "review-pr-43", "mark_id": "ink-002", "actor": "james-tablet-identity"},
+      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "review-pr-43", "mark_id": "ink-002", "actor": "james-tablet-identity", "current_owner": "owner-pr-43", "geometry": {"space": "page-normalized", "points": [[0.08, 0.38], [0.44, 0.38]]}, "crop_ref": "synthetic-crop-002"},
       "directive": {"intent": "reject_review", "target": {"kind": "pull_request", "repo": "example/primer", "number": 43, "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "expires_at": "2026-11-15T18:00:00Z"},
       "expected": {"action": "record_rejection", "read_back": "rejection at exact head with review event ID", "pr_state": "open"}
     },
     {
       "mark": "margin_note",
-      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "review-pr-44", "mark_id": "ink-003", "actor": "james-tablet-identity", "crop_ref": "synthetic-crop-003"},
+      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "review-pr-44", "mark_id": "ink-003", "actor": "james-tablet-identity", "current_owner": "owner-pr-44", "geometry": {"space": "page-normalized", "points": [[0.75, 0.52], [0.78, 0.55], [0.82, 0.56]]}, "crop_ref": "synthetic-crop-003"},
       "directive": {"intent": "post_review_comment", "target": {"kind": "pull_request", "repo": "example/primer", "number": 44, "head": "cccccccccccccccccccccccccccccccccccccccc"}, "payload": {"transcription": "Show the source for this claim.", "transcription_status": "confirmed"}, "expires_at": "2026-11-15T18:00:00Z"},
       "expected": {"action": "post_comment", "read_back": "comment ID and exact posted text"}
     },
     {
       "mark": "arrow",
-      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "queue-issue-45", "mark_id": "ink-004", "actor": "james-tablet-identity"},
-      "directive": {"intent": "reassign_item", "target": {"kind": "issue", "repo": "example/primer", "number": 45, "revision": "issue-45-r3"}, "payload": {"recipient_display": "Biggy", "recipient_identity": "resolved-member-id-biggy"}, "expires_at": "2026-11-15T18:00:00Z"},
-      "expected": {"action": "assign_issue", "read_back": "issue assignee is resolved-member-id-biggy with operation ID"}
+      "source": {"page_revision": "page-2026-11-15-r1", "row_id": "queue-issue-45", "mark_id": "ink-004", "actor": "james-tablet-identity", "current_owner": "resolved-member-id-kerouac", "geometry": {"space": "page-normalized", "points": [[0.46, 0.69], [0.69, 0.69], [0.65, 0.66], [0.69, 0.69], [0.65, 0.72]]}, "crop_ref": "synthetic-crop-004"},
+      "directive": {"intent": "reassign_item", "target": {"kind": "issue", "repo": "example/primer", "number": 45, "revision": "issue-45-r3"}, "payload": {"previous_owner_identity": "resolved-member-id-kerouac", "recipient_display": "Biggy", "recipient_identity": "resolved-member-id-biggy"}, "expires_at": "2026-11-15T18:00:00Z"},
+      "expected": {"action": "assign_issue", "read_back": "issue assignee is resolved-member-id-biggy with operation ID", "audit": {"previous_owner_identity": "resolved-member-id-kerouac", "recipient_identity": "resolved-member-id-biggy"}}
     }
   ]
 }
