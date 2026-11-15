@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import numpy as np
 from PIL import Image
 from notebook_lesson_eval import compare
 from notebook_model_eval import prepare_images, load_images, collect, prompt_variant, digest, identity
@@ -205,6 +206,10 @@ class ImageEvalTests(unittest.TestCase):
             self.assertIn('NOT attested',packet['conditions'])
             with Image.open(root/'a/integral.png') as image:
                 self.assertEqual(image.size,(960,720))
+                pixels=np.asarray(image)
+                for offset in (1,2):
+                    self.assertTrue(np.array_equal(pixels[:,::3,:],pixels[:,offset::3,:]))
+                    self.assertTrue(np.array_equal(pixels[::3,:,:],pixels[offset::3,:,:]))
             for q in packet['questions']:
                 self.assertNotIn(q['question'],q['context'])
 

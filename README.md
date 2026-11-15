@@ -12,7 +12,7 @@ told, narrated in the earbuds.
 
 Grew out of the herd-board notebook tools in a private repo, where its full development history stays.
 
-Tests: `python3 -m unittest` (about two minutes) and `node test_native_inline_ink.cjs`; `./herd-board-replay` before
-any deploy.
+PR CI runs `python3 -m unittest`, `node test_native_inline_ink.cjs` and the committed
+`./herd-board-replay` corpus. Replay captured live responses before any deploy as well.
 
 License: MIT (see `LICENSE`).
