@@ -1,7 +1,8 @@
 # B3 handwriting accuracy: preparation and private-data protocol
 
-Status: scorer and sampler prepared; no real pages, references, model calls or
-accuracy results have been collected. Frontier PLAN.md B3 requires 100 of
+Status: scorer, sampler and private binding preflight prepared; no real pages,
+references, provider calls or accuracy results have been collected. A separate
+stand-in rehearsal is in `B3_Q358_STANDIN_REHEARSAL.md`. Frontier PLAN.md B3 requires 100 of
 James's real tablet pages, transcribed by him, and character and word error
 rates per model. Pi Dog reviews this method before live collection.
 
@@ -151,7 +152,23 @@ establish tablet access, page eligibility or model accuracy.
    exist, stop and report the incomplete run and exclusion counts. Any further
    collection requires a separately frozen, reviewed run and fresh page-linked
    permission; do not append pages to this sample or report B3 CER/WER.
-6. **Score and report.** Run `handwriting_accuracy.py --require-complete` only
+6. **Bind, score and report.** Before scoring, a reviewed private runner checks
+   the final 100 IDs against the frozen `handwriting_sample.py` output and any
+   private exclusion/replacement ledger. It hashes each actual frozen PNG byte
+   stream and compares it with that manifest, rejects missing or extra images,
+   and verifies every James reference and model output names the same page and
+   image digest. Record replacements in reserve rank order, with a reason, and
+   never select a reserve based on model performance. The adapters must write
+   private receipts alongside their outputs: page, image hash, model, frozen
+   prompt digest, model/config digest (including adapter version), and digest
+   of the exact JSON output row. `handwriting_binding.py` checks those receipts
+   and the byte/manifest linkage before calling the strict scorer. It cannot
+   establish that an adapter actually used a prompt or called a provider;
+   review and live operator evidence must establish that provenance. James's
+   reference must be recorded against the displayed frozen PNG without model
+   output in view. Keep the manifest, images, exact prompt/config, receipts,
+   consent record and replacement ledger private and immutable during the run.
+   Run the complete check only
    after 100 usable references and complete Gemini/Luna outputs (plus Astra if
    enabled) exist. If an arm is missing or errored, report the failure counts
    and pause the comparison; incomplete-arm CER/WER are not a B3 result.
@@ -201,12 +218,29 @@ hard pages. Report math and uncertain-page exclusions
 separately if they materially affect interpretation; the primary score remains
 literal.
 
-Example private run, after both files exist outside the checkout:
+The private `run-config.json` has `prompt_sha256` and `models`, a map of each
+configured model to its config digest. Each adapter receipt has `page`,
+`image_sha256`, `model`, `prompt_sha256`, `config_sha256`, and `output_sha256`.
+The final digest hashes the exact output row serialized as sorted-key compact
+UTF-8 JSON with non-ASCII characters unescaped. The adapter must generate the
+receipt from the actual call and preserve its call log privately; manually
+constructed matching receipts prove only internal consistency. The optional
+replacement JSONL has `excluded_page`, `reserve_page`, and `reason` (`unclear`,
+`untranscribable`, or `permission_withdrawn`). Without that ledger, the final
+100 IDs must equal the original sample. The image directory contains exactly
+one `<opaque page>.png` per final selected ID. This preflight does not inspect
+authorship or consent; the reviewed operator checks those separately before
+transmitting any image.
+
+Example private run, after the reviewed runner has produced all files outside
+the checkout and verified provider permissions:
 
 ```sh
-python3 handwriting_accuracy.py --references /private/b3/references.jsonl \
-  --outputs /private/b3/outputs.jsonl \
-  --model gemini-3.5-flash-lite --model gpt-5.6-luna --require-complete
+python3 handwriting_binding.py --manifest /private/b3/sample.json \
+  --images /private/b3/frozen-images --references /private/b3/references.jsonl \
+  --outputs /private/b3/outputs.jsonl --run-config /private/b3/run-config.json \
+  --receipts /private/b3/adapter-receipts.jsonl \
+  --model gemini-3.5-flash-lite --model gpt-5.6-luna
 ```
 
 The command writes only an aggregate JSON summary to stdout. Inspect it for
