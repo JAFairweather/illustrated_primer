@@ -63,7 +63,7 @@ class BindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'PNG bytes differ'):
             self.check()
 
-    def test_private_cli_one_run_and_mutated_byte(self):
+    def prepare_cli(self):
         manifest_path = self.root / 'sample.json'
         refs_path = self.root / 'references.jsonl'
         outs_path = self.root / 'outputs.jsonl'
@@ -84,6 +84,10 @@ class BindingTests(unittest.TestCase):
                    '--run-config', str(config_path), '--receipts', str(receipts_path)]
         for model in MODELS:
             command.extend(['--model', model])
+        return command, images_dir, manifest_path
+
+    def test_private_cli_one_run_and_mutated_byte(self):
+        command, images_dir, _ = self.prepare_cli()
         good = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(good.returncode, 0, good.stderr)
         self.assertEqual(json.loads(good.stdout)['pages'], 100)
@@ -94,6 +98,34 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(bad.stdout, '')
         self.assertIn('private input rejected', bad.stderr)
         self.assertNotIn(self.selected[0], bad.stderr)
+
+    def test_cli_rejects_symlinked_image_and_checkout_alias(self):
+        command, images_dir, manifest_path = self.prepare_cli()
+        page = self.selected[0]
+        image = images_dir / f'{page}.png'
+        from_checkout = Path(__file__).parent / f'.dennis_binding_test_{page}.png'
+        try:
+            from_checkout.write_bytes(image.read_bytes())
+            image.unlink()
+            image.symlink_to(from_checkout)
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, '')
+            self.assertNotIn('Traceback', result.stderr)
+        finally:
+            from_checkout.unlink(missing_ok=True)
+        image.unlink()
+        image.write_bytes(self.bytes[page])
+        from tempfile import TemporaryDirectory as TempDir
+        with TempDir(dir=Path(__file__).parent, prefix='.dennis_binding_') as checkout_dir:
+            alias = Path(checkout_dir) / 'sample.json'
+            alias.symlink_to(manifest_path)
+            alias_command = command.copy()
+            alias_command[alias_command.index('--manifest') + 1] = str(alias)
+            result = subprocess.run(alias_command, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, '')
+            self.assertNotIn('Traceback', result.stderr)
 
     def test_declared_hash_and_receipt_mutations(self):
         self.refs[0]['image_sha256'] = 'f' * 64
@@ -130,6 +162,48 @@ class BindingTests(unittest.TestCase):
             self.manifest['reserves'][1], self.manifest['reserves'][0])
         with self.assertRaisesRegex(ValueError, 'sample/reserve order'):
             self.check()
+
+    def test_reserve_cannot_be_removed_or_metadata_changed_to_bool(self):
+        self.manifest['reserves'].pop(0)
+        with self.assertRaisesRegex(ValueError, 'reserve count'):
+            self.check()
+        self.manifest = select([{'page': page, 'image_sha256': hashlib.sha256(payload).hexdigest(),
+                                 'notebook': 'synthetic', 'eligible': True}
+                                for page, payload in self.bytes.items()], 'stand-in-seed')
+        self.manifest['version'] = True
+        with self.assertRaisesRegex(ValueError, 'manifest'):
+            self.check()
+        self.manifest['version'] = 1
+        self.manifest['eligible_count'] = True
+        with self.assertRaisesRegex(ValueError, 'metadata'):
+            self.check()
+
+    def test_invalid_notebook_and_non_png_with_matching_hash(self):
+        self.manifest['sample'][0]['notebook'] = 'bad notebook'
+        with self.assertRaisesRegex(ValueError, 'sampled page'):
+            self.check()
+        self.manifest['sample'][0]['notebook'] = 'synthetic'
+        page = self.selected[0]
+        payload = b'not a PNG'
+        digest = hashlib.sha256(payload).hexdigest()
+        self.images[page].write_bytes(payload)
+        for row in self.manifest['sample'] + self.manifest['reserves'] + self.refs + self.outs:
+            if row['page'] == page:
+                row['image_sha256'] = digest
+        self.receipts = self.make_receipts(self.outs)
+        with self.assertRaisesRegex(ValueError, 'PNG signature'):
+            self.check()
+
+    def test_invalid_config_shape_is_rejected_without_attribute_error(self):
+        self.config['models'] = list(MODELS)
+        with self.assertRaisesRegex(ValueError, 'configuration'):
+            self.check()
+        command, _, _ = self.prepare_cli()
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, '')
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertIn('private input rejected', result.stderr)
 
 
 if __name__ == '__main__':

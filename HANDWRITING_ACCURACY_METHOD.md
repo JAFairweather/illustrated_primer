@@ -155,7 +155,8 @@ establish tablet access, page eligibility or model accuracy.
 6. **Bind, score and report.** Before scoring, a reviewed private runner checks
    the final 100 IDs against the frozen `handwriting_sample.py` output and any
    private exclusion/replacement ledger. It hashes each actual frozen PNG byte
-   stream and compares it with that manifest, rejects missing or extra images,
+   stream and compares it with that manifest, checks the PNG signature, rejects
+   symlinked images, checkout aliases, and missing or extra images,
    and verifies every James reference and model output names the same page and
    image digest. Record replacements in reserve rank order, with a reason, and
    never select a reserve based on model performance. The adapters must write

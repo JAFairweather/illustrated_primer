@@ -7,27 +7,38 @@ All inputs must stay outside the checkout; stdout contains counts only.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
 
 from handwriting_accuracy import MODELS, checked_id, read_jsonl, score
 
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+
 
 def verify(manifest, images, references, outputs, models, config, receipts, replacements=()):
-    if set(manifest) != {'version', 'seed', 'eligible_count', 'sample', 'reserves'} or manifest['version'] != 1:
+    if (not isinstance(manifest, dict)
+            or set(manifest) != {'version', 'seed', 'eligible_count', 'sample', 'reserves'}
+            or type(manifest['version']) is not int or manifest['version'] != 1):
         raise ValueError('invalid frozen sample manifest')
     sample, reserves = manifest['sample'], manifest['reserves']
-    if len(sample) != 100 or len(reserves) > 20:
-        raise ValueError('sample must contain 100 pages and at most 20 reserves')
+    if not isinstance(sample, list) or not isinstance(reserves, list) or len(sample) != 100:
+        raise ValueError('sample must contain 100 pages')
     seed = manifest['seed']
     if (not isinstance(seed, str) or not 0 < len(seed) <= 100
-            or not isinstance(manifest['eligible_count'], int)
-            or manifest['eligible_count'] < len(sample) + len(reserves)):
+            or type(manifest['eligible_count']) is not int
+            or manifest['eligible_count'] < 100):
         raise ValueError('invalid frozen sample metadata')
+    if len(reserves) != min(20, manifest['eligible_count'] - 100):
+        raise ValueError('reserve count differs from eligible count')
     frozen = {}
     for row in sample + reserves:
-        if set(row) != {'page', 'image_sha256', 'notebook', 'eligible'} or row['eligible'] is not True:
+        if (not isinstance(row, dict)
+                or set(row) != {'page', 'image_sha256', 'notebook', 'eligible'}
+                or row['eligible'] is not True
+                or not isinstance(row['notebook'], str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', row['notebook'])):
             raise ValueError('invalid sampled page')
         page, digest = checked_id(row)
         if page in frozen:
@@ -43,7 +54,7 @@ def verify(manifest, images, references, outputs, models, config, receipts, repl
 
     selected = {row['page'] for row in sample}
     for index, change in enumerate(replacements):
-        if set(change) != {'excluded_page', 'reserve_page', 'reason'} or change['reason'] not in (
+        if not isinstance(change, dict) or set(change) != {'excluded_page', 'reserve_page', 'reason'} or change['reason'] not in (
                 'unclear', 'untranscribable', 'permission_withdrawn'):
             raise ValueError('invalid replacement record')
         if change['excluded_page'] not in selected or index >= len(reserves):
@@ -58,17 +69,24 @@ def verify(manifest, images, references, outputs, models, config, receipts, repl
     if set(images) != selected:
         raise ValueError('PNG set differs from final frozen sample')
     for page, path in images.items():
-        if hashlib.sha256(Path(path).read_bytes()).hexdigest() != frozen[page]:
+        image_bytes = Path(path).read_bytes()
+        if not image_bytes.startswith(PNG_SIGNATURE):
+            raise ValueError('invalid PNG signature')
+        if hashlib.sha256(image_bytes).hexdigest() != frozen[page]:
             raise ValueError('PNG bytes differ from frozen sample')
 
     refs, outs = list(references), list(outputs)
+    if any(not isinstance(row, dict) for row in refs + outs):
+        raise ValueError('invalid scored row')
     if {row.get('page') for row in refs} != selected or len(refs) != 100:
         raise ValueError('reference set differs from final frozen sample')
     for row in refs + outs:
         page, digest = checked_id(row)
         if page not in selected or digest != frozen[page]:
             raise ValueError('scored row differs from frozen image')
-    if set(config) != {'prompt_sha256', 'models'} or set(config['models']) != set(models):
+    if (not isinstance(config, dict) or set(config) != {'prompt_sha256', 'models'}
+            or not isinstance(config['models'], dict)
+            or set(config['models']) != set(models)):
         raise ValueError('frozen run configuration differs from model list')
     digests = [config['prompt_sha256'], *config['models'].values()]
     if any(not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value) for value in digests):
@@ -78,7 +96,7 @@ def verify(manifest, images, references, outputs, models, config, receipts, repl
         raise ValueError('duplicate scored output')
     seen_receipts = set()
     for receipt in receipts:
-        if set(receipt) != {'page', 'image_sha256', 'model', 'prompt_sha256',
+        if not isinstance(receipt, dict) or set(receipt) != {'page', 'image_sha256', 'model', 'prompt_sha256',
                             'config_sha256', 'output_sha256'}:
             raise ValueError('invalid adapter receipt')
         key = (receipt['page'], receipt['model'])
@@ -116,11 +134,14 @@ def main():
                                    args.run_config, args.receipts)]
         if args.replacements:
             paths.append(Path(args.replacements))
-        if any(path.resolve() == checkout or checkout in path.resolve().parents for path in paths):
+        if any(any(candidate == checkout or checkout in candidate.parents
+                   for candidate in (Path(os.path.abspath(path)), path.resolve()))
+               for path in paths):
             raise ValueError('private inputs must stay outside the checkout')
         image_dir = Path(args.images)
         image_paths = list(image_dir.iterdir())
-        if any(not path.is_file() or path.suffix != '.png' for path in image_paths):
+        if any(path.is_symlink() or not path.is_file() or path.suffix != '.png'
+               for path in image_paths):
             raise ValueError('image directory must contain only PNG files')
         images = {path.stem: path for path in image_paths}
         if len(images) != len(image_paths):
@@ -130,7 +151,8 @@ def main():
         replacements = read_jsonl(args.replacements) if args.replacements else ()
         result = verify(manifest, images, read_jsonl(args.references), read_jsonl(args.outputs),
                         args.model, config, read_jsonl(args.receipts), replacements)
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, LookupError,
+            RuntimeError, json.JSONDecodeError) as error:
         print(f'handwriting_binding: {type(error).__name__}; private input rejected', file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
